@@ -30,10 +30,10 @@ void AddBLTOps()
 {
 	STARTDECL(blt_open) ()
 	{
-		return Value(terminal_open());
+		return Value(terminal_open() == 0);
 	}
 	ENDDECL0(blt_open, "", "", "I",
-		"opens the terminal. use blt_set to set options.");
+		"opens the terminal. returns 1 on failure, to comply with lobster's fatal(). use blt_set to set options.");
 
 	STARTDECL(blt_close) ()
 	{
@@ -55,7 +55,9 @@ void AddBLTOps()
 	{
 		key.DECRT();
 		fallback.DECRT();
-		return Value(terminal_get8((int8_t*)(key.sval->str()), (int8_t*)(fallback.sval->str())));
+		char* cs = (char*)terminal_get8((int8_t*)(key.sval->str()), (int8_t*)(fallback.sval->str()));
+		Value v = Value(g_vm->NewString(cs, strlen(cs)));
+		return v;
 	}
 	ENDDECL2(blt_get, "key,fallback", "SS", "S",
 		"gets options from the config file.");
@@ -102,65 +104,67 @@ void AddBLTOps()
 		"selects the current layer to draw upon.");
 
 
-	STARTDECL(blt_color) (Value& argb)
+	STARTDECL(blt_color) (Value& rgba)
 	{
 		uint32_t clr = 0xff000000u;
-		switch (argb.vval->len)
+		switch (rgba.vval->len)
 		{
 		case 3:
 		{
-			clr |= argb.vval->at(0).ival << 16;
-			clr |= argb.vval->at(1).ival << 8;
-			clr |= argb.vval->at(2).ival;
+			clr |= (((int)(rgba.vval->at(0).fval * 255)) & 255) << 16;
+			clr |= (((int)(rgba.vval->at(1).fval * 255)) & 255) << 8;
+			clr |= (((int)(rgba.vval->at(2).fval * 255)) & 255);
 		}
 		break;
 		case 4:
 		{
-			clr |= argb.vval->at(0).ival << 24;
-			clr |= argb.vval->at(1).ival << 16;
-			clr |= argb.vval->at(2).ival << 8;
-			clr |= argb.vval->at(3).ival;
+			clr = (((int)(rgba.vval->at(3).fval * 255)) & 255) << 24;
+
+			clr |= (((int)(rgba.vval->at(0).fval * 255)) & 255) << 16;
+			clr |= (((int)(rgba.vval->at(1).fval * 255)) & 255) << 8;
+			clr |= (((int)(rgba.vval->at(2).fval * 255)) & 255);
 		}
 		break;
 		default:
 			break;
 		}
-		argb.DECRT();
+		rgba.DECRT();
 		terminal_color(clr);
 		return Value();
 	}
-	ENDDECL1(blt_color, "argb", "V", "",
-		"sets the foreground color with a 3-element rgb vector of ints or a 4-element argb vector of ints.");
+	ENDDECL1(blt_color, "rgba", "V", "",
+		"sets the foreground color with a 3-element rgb vector of floats or a 4-element argb vector of floats.");
 
-	STARTDECL(blt_bkcolor) (Value& argb)
+	STARTDECL(blt_bkcolor) (Value& rgba)
 	{
 		uint32_t clr = 0xff000000u;
-		switch (argb.vval->len)
+		switch (rgba.vval->len)
 		{
 		case 3:
 		{
-			clr |= argb.vval->at(0).ival << 16;
-			clr |= argb.vval->at(1).ival << 8;
-			clr |= argb.vval->at(2).ival;
+			clr |= (((int)(rgba.vval->at(0).fval * 255)) & 255) << 16;
+			clr |= (((int)(rgba.vval->at(1).fval * 255)) & 255) << 8;
+			clr |= (((int)(rgba.vval->at(2).fval * 255)) & 255);
 		}
 		break;
 		case 4:
 		{
-			clr |= argb.vval->at(0).ival << 24;
-			clr |= argb.vval->at(1).ival << 16;
-			clr |= argb.vval->at(2).ival << 8;
-			clr |= argb.vval->at(3).ival;
+			clr  = (((int)(rgba.vval->at(3).fval * 255)) & 255) << 24;
+
+			clr |= (((int)(rgba.vval->at(0).fval * 255)) & 255) << 16;
+			clr |= (((int)(rgba.vval->at(1).fval * 255)) & 255) << 8;
+			clr |= (((int)(rgba.vval->at(2).fval * 255)) & 255);
 		}
 		break;
 		default:
 			break;
 		}
-		argb.DECRT();
+		rgba.DECRT();
 		terminal_bkcolor(clr);
 		return Value();
 	}
-	ENDDECL1(blt_bkcolor, "argb", "V", "",
-		"sets the background color with a 3-element rgb vector of ints or a 4-element argb vector of ints.");
+	ENDDECL1(blt_bkcolor, "rgba", "V", "",
+		"sets the background color with a 3-element rgb vector of floats or a 4-element rgba vector of floats.");
 
 	STARTDECL(blt_composition) (Value& mode)
 	{
@@ -198,26 +202,28 @@ void AddBLTOps()
 	{
 		color_t clr = terminal_pick_color(x.ival, y.ival, index.ival);
 		auto v = g_vm->NewVector(4, V_VECTOR);
-		for (int i = 24; i >= 0; i -= 8)
+		for (int i = 16; i >= 0; i -= 8)
 		{
-			v->push(Value((int)((clr >> i) & 255)));
+			v->push(Value(((clr >> i) & 255) / 255.0f));
 		}
+		v->push(Value(((clr >> 24) & 255) / 255.0f));
 		return Value(v);
 	}
-	ENDDECL3(blt_pick_color, "x,y,code", "III", "I]",
-		"finds what color is used for the foreground in the current layer at the specified x and y coordinates, and at the specified index within that cell (0 if composition is disabled).");
+	ENDDECL3(blt_pick_color, "x,y,code", "III", "F]",
+		"finds what color is used (returns rgba as a 4-element float vector) for the foreground in the current layer at the specified x and y coordinates, and at the specified index within that cell (0 if composition is disabled).");
 
 	STARTDECL(blt_pick_bkcolor) (Value& x, Value& y)
 	{
 		color_t clr = terminal_pick_bkcolor(x.ival, y.ival);
 		auto v = g_vm->NewVector(4, V_VECTOR);
-		for (int i = 24; i >= 0; i -= 8)
+		for (int i = 16; i >= 0; i -= 8)
 		{
-			v->push(Value((int)((clr >> i) & 255)));
+			v->push(Value(((clr >> i) & 255) / 255.0f));
 		}
+		v->push(Value(((clr >> 24) & 255) / 255.0f));
 		return Value(v);
 	}
-	ENDDECL2(blt_pick_bkcolor, "x,y", "II", "I]",
+	ENDDECL2(blt_pick_bkcolor, "x,y", "II", "F]",
 		"finds what color is drawn for the background at the specified x and y coordinates.");
 
 	STARTDECL(blt_print) (Value& x, Value& y, Value &s)
@@ -293,13 +299,14 @@ void AddBLTOps()
 	{
 		color_t clr = color_from_name8((int8_t*)(name.sval->str()));
 		auto v = g_vm->NewVector(4, V_VECTOR);
-		for (int i = 24; i >= 0; i -= 8)
+		for (int i = 16; i >= 0; i -= 8)
 		{
-			v->push(Value((int)((clr >> i) & 255)));
+			v->push(Value(((clr >> i) & 255) / 255.0f));
 		}
+		v->push(Value(((clr >> 24) & 255) / 255.0f));
 		return Value(v);
 	}
-	ENDDECL1(blt_color_from_name, "name", "S", "I]",
+	ENDDECL1(blt_color_from_name, "name", "S", "F]",
 		"get a color by name, with similar names to libtcod's hue-and-brightness style.");
 
 }

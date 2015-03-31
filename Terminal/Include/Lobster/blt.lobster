@@ -1,3 +1,53 @@
+// Copyright 2014 Tommy Ettinger. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file should go in lobster/include/ , not in dev/ The functions should
+// be pre-defined by the engine if it has been compiled to support BLT.
+
+	/*
+	
+blt_open() -> int
+blt_close()
+blt_set(params:string) -> int
+blt_refresh()
+blt_clear()
+blt_clear_area(x:int, y:int, w:int, h:int)
+blt_crop(x:int, y:int, w:int, h:int)
+blt_layer(index:int)
+blt_color(rgba:[float])
+blt_bkcolor(rgba:[float])
+blt_composition(mode:int)
+blt_put(x:int, y:int, code:int)
+blt_put_ext(x:int, y:int, dx:int, dy:int, code:int);
+blt_pick(x:int, y:int, index:int) -> int
+blt_pick_color(x:int, y:int, index:int) -> [float]
+blt_pick_bkcolor(x:int, y:int) -> [float]
+blt_print(ix:int, y:int, s:string) -> int
+blt_measure(s:string) -> int
+blt_has_input() -> int
+blt_state(code:int) -> int
+blt_read() -> int
+blt_read_str8(x:int, y:int, max:int) -> string, int
+blt_peek() -> int
+blt_delay(period:int)
+blt_get(key:string, fallback:string) -> string
+blt_color_from_name(name:string) -> [float]
+
+	*/
+
+
+
 /*
  * Keyboard scancodes for events/states
  */
@@ -140,7 +190,7 @@ blt_fullscreen :==       0xCB /* Fullscreen state */
 /*
  * Other events
  */
-blt_close :==            0xE0
+blt_closed :==           0xE0
 blt_resized :==          0xE1
 
 /*
