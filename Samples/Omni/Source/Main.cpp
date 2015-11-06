@@ -20,7 +20,12 @@ struct TestEntry
 
 TERMINAL_TAKE_CARE_OF_WINMAIN
 
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+int entry()
+#else
 int main()
+#endif
 {
 	terminal_open();
 

@@ -27,6 +27,9 @@
 #if defined(_WIN32)
 #include "WinApiWindow.hpp"
 #endif
+#if defined(__APPLE__)
+#include "MacOSWindow.h"
+#endif
 #include "Log.hpp"
 #include <future>
 #include <stdexcept>
@@ -129,6 +132,7 @@ namespace BearLibTerminal
 
 	void Window::Stop()
 	{
+		LOG(Trace, "Window::Stop()");
 		m_proceed = false;
 
 		if (m_thread.joinable())
@@ -146,6 +150,9 @@ namespace BearLibTerminal
 #endif
 #if defined(_WIN32)
 		result.reset(new WinApiWindow());
+#endif
+#if defined(__APPLE__)
+		result.reset(new MacOSWindow());
 #endif
 
 		result->Run();
