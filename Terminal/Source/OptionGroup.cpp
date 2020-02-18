@@ -1,9 +1,24 @@
 /*
- * OptionGroup.cpp
- *
- *  Created on: Oct 16, 2013
- *      Author: Cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2015 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #include "OptionGroup.hpp"
 
@@ -13,6 +28,21 @@
 
 namespace BearLibTerminal
 {
+	static bool isquote(wchar_t c)
+	{
+		return c == L'\'' || c == L'"' || c == L'[' || c == '{';
+	}
+
+	static wchar_t get_closing_quote(wchar_t c)
+	{
+		switch (c)
+		{
+		case L'[':  return L']';
+		case L'{':  return L'}';
+		default:    return c;
+		}
+	}
+
 	std::wstring read_until3(const wchar_t*& p, const std::wstring& until)
 	{
 		std::wstring value, space;
@@ -42,10 +72,10 @@ namespace BearLibTerminal
 					closing_quote = 0;
 				}
 			}
-			else if ((*p == L'\'' || *p == L'"' || *p == L'[') && !closing_quote)
+			else if (isquote(*p) && !closing_quote && value.empty())
 			{
 				// Start of quoted string.
-				closing_quote = (*p == L'['? L']': *p);
+				closing_quote = get_closing_quote(*p);
 				space.clear();
 			}
 			else
@@ -80,7 +110,7 @@ namespace BearLibTerminal
 			// a.b.c   --> [a.b] c      ini.custom.property
 			// a.b.c.d --> [a.b] c.d    ini.bearlibterminal.window.title
 
-			std::wstring section_name;
+			std::wstring section_name = L"_";
 
 			size_t first_period_pos = name.find(L'.');
 			if (first_period_pos == std::wstring::npos)

@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -23,61 +23,45 @@
 #ifndef BEARLIBTERMINAL_LOG_HPP
 #define BEARLIBTERMINAL_LOG_HPP
 
-#include <mutex>
 #include <string>
 #include <sstream>
-#include <atomic>
-#include <memory>
 
 namespace BearLibTerminal
 {
 	class Log
 	{
 	public:
-		enum class Level {None, Fatal, Error, Warning, Info, Debug, Trace};
+		enum class Level {Fatal, Error, Warning, Info, Debug, Trace};
 		enum class Mode {Truncate, Append};
 
 	public:
 		void Write(Level level, const std::wstring& what);
-		void SetFile(const std::wstring& filename);
-		void SetLevel(Level level);
-		void SetMode(Mode mode);
-		std::wstring GetFile() const;
-		Level GetLevel() const;
-		Mode GetMode() const;
-		void Dispose();
-
-	public:
+		void Reset();
 		static Log& Instance();
+		std::wstring filename;
+		Level level;
+		Mode mode;
 
 	private:
 		Log();
-		void Init();
-
-	private:
-		mutable std::mutex m_lock;
-		bool m_initialized;
-		volatile Level m_level;
-		Mode m_mode;
-		std::wstring m_filename;
 		bool m_truncated;
 	};
 
-	std::wostream& operator<< (std::wostream& stream, const Log::Level& value);
+	std::wostream& operator<< (std::wostream& stream, Log::Level value);
 	std::wistream& operator>> (std::wistream& stream, Log::Level& value);
 
-	std::wostream& operator<< (std::wostream& stream, const Log::Mode& value);
+	std::wostream& operator<< (std::wostream& stream, Log::Mode value);
 	std::wistream& operator>> (std::wistream& stream, Log::Mode& mode);
 }
 
-#define LOG(level, what)\
+#define LOG(level_, what)\
 	do\
 	{\
-		if (BearLibTerminal::Log::Level::level <= BearLibTerminal::Log::Instance().GetLevel())\
+		if (BearLibTerminal::Log::Level::level_ <= BearLibTerminal::Log::Instance().level)\
 		{\
 			std::wostringstream wss_;\
 			wss_ << what;\
-			BearLibTerminal::Log::Instance().Write(BearLibTerminal::Log::Level::level, wss_.str());\
+			BearLibTerminal::Log::Instance().Write(BearLibTerminal::Log::Level::level_, wss_.str());\
 		}\
 	}\
 	while (0)

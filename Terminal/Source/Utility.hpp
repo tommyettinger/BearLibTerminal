@@ -1,10 +1,24 @@
 /*
- * Utility.hpp
- *
- *  Created on: Oct 16, 2013
- *      Author: Cfyz
- */
-
+* BearLibTerminal
+* Copyright (C) 2013-2016 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 #ifndef UTILITY_HPP_
 #define UTILITY_HPP_
 
@@ -13,14 +27,19 @@
 #include <mutex>
 #include <algorithm>
 #include <memory>
+#include <vector>
 
 namespace BearLibTerminal
 {
 	template<typename T, typename char_t> bool try_parse(const std::basic_string<char_t>& s, T& out)
 	{
 		std::basic_stringstream<char_t> stream(s);
-		stream >> out;
-		return !(stream.fail() || stream.bad());
+		T temp;
+		stream >> temp;
+		if (stream.fail())
+			return false;
+		out = std::move(temp);
+		return true;
 	}
 
 	template<typename T, typename char_t> bool try_parse(const std::basic_string<char_t>& s)
@@ -29,33 +48,33 @@ namespace BearLibTerminal
 		return try_parse(s, temp);
 	}
 	
+	template<typename T, typename char_t> bool try_parse(const std::basic_string<char_t>& s, T& out, std::ios_base& (*f)(std::ios_base&))
+	{
+		std::basic_istringstream<char_t> stream(s);
+		return !(stream >> f >> out).fail();
+	}
+
+	bool try_parse(const std::wstring& s, bool& out);
+
+	bool try_parse(const std::wstring& s, uint64_t& out);
+
+	bool try_parse(const std::wstring& s, wchar_t& out);
+
+	bool try_parse(const std::wstring& s, char32_t& out);
+
 	template<typename T, typename char_t> T parse(const std::basic_string<char_t>& s)
 	{
 		T result;
 		if (!try_parse(s, result)) result = T();
 		return result;
 	}
-	
-	template<typename T, typename char_t> bool try_parse(const std::basic_string<char_t>& s, T& out, std::ios_base& (*f)(std::ios_base&))
-	{
-		std::basic_istringstream<char_t> stream(s);
-		return !(stream >> f >> out).fail();
-	}
-	
+
 	template<typename T, typename char_t> T parse(const std::basic_string<char_t>& s, std::ios_base& (*f)(std::ios_base&))
 	{
 		T result;
 		if (!try_parse(s, result, f)) result = T();
 		return result;
 	}
-
-	bool try_parse(const std::wstring& s, bool& out);
-
-	bool try_parse(const std::wstring& s, uint16_t& out);
-
-	bool try_parse(const std::wstring& s, uint64_t& out);
-
-	bool try_parse(const std::wstring& s, wchar_t& out);
 
 	template<typename char_t, typename T> std::basic_string<char_t> to_string(const T& value)
 	{
@@ -120,6 +139,8 @@ namespace BearLibTerminal
 		else
 			return std::basic_string<char_t>();
 	}
+
+	std::vector<std::wstring> split(const std::wstring& s, wchar_t delimiter);
 
 	uint64_t gettime();
 

@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -25,10 +25,11 @@
 
 #ifdef _WIN32
 
+#include <list>
 #include <string>
 #include <cstdint>
 #include "Window.hpp"
-#include "Semaphore.hpp"
+#include "Platform.hpp"
 
 // Force SDK version to XP SP3
 #if !defined(WINVER)
@@ -37,15 +38,18 @@
 #endif
 
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include <WindowsX.h>
+#include <windows.h>
+#include <windowsx.h>
 
 namespace BearLibTerminal
 {
+	// Windows Vista+ functionality, i. e. not available universally and cannot be linked against.
+	const DWORD DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+
 	class WinApiWindow: public Window
 	{
 	public:
-		WinApiWindow();
+		WinApiWindow(EventHandler handler);
 		~WinApiWindow();
 		bool ValidateIcon(const std::wstring& filename);
 		void SetTitle(const std::wstring& title);
@@ -53,27 +57,25 @@ namespace BearLibTerminal
 		void SetClientSize(const Size& size);
 		void Show();
 		void Hide();
-		std::future<void> Post(std::function<void()> func);
 		bool AcquireRC();
 		bool ReleaseRC();
 		void SwapBuffers();
 		void SetVSync(bool enabled);
 		void SetResizeable(bool resizeable);
-		void ToggleFullscreen();
+		void SetFullscreen(bool fullscreen);
 		void SetCursorVisibility(bool visible);
-		void Delay(int period);
 		Size GetActualSize();
+		int PumpEvents();
 	protected:
-		void ThreadFunction();
 		bool Construct();
 		void Destroy();
-		bool PumpEvents();
 		void DestroyUnlocked();
 		bool CreateWindowObject();
 		bool CreateOpenGLContext();
 		void DestroyWindowObject();
 		void DestroyOpenGLContext();
 		void Redraw();
+		void ClipToScreen(int width, int height, bool center);
 		static LRESULT CALLBACK SharedWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 		LRESULT WindowProc(UINT uMsg, WPARAM wParam, LPARAM lParam);
 		LRESULT HandleWmPaint(WPARAM wParam, LPARAM lParam);
@@ -82,19 +84,20 @@ namespace BearLibTerminal
 		HWND m_handle;
 		HDC m_device_context;
 		HGLRC m_rendering_context;
-		Semaphore m_redraw_barrier;
 		bool m_maximized;
 		uint64_t m_last_mouse_click;
 		int m_consecutive_mouse_clicks;
 		bool m_suppress_wm_paint_once;
 		bool m_mouse_cursor_enabled;
 		bool m_mouse_cursor_visible;
-
-		typedef BOOL (WINAPI *PFN_WGLSWAPINTERVALEXT)(int interval);
-		PFN_WGLSWAPINTERVALEXT m_wglSwapIntervalEXT;
+		std::list<Event> m_events;
+		bool m_resizing;
+		bool m_has_been_shown;
+		Module::Function<BOOL, stdcall_t, int> m_wglSwapIntervalEXT;
+		Module::Function<HRESULT, stdcall_t, HWND, DWORD, PVOID, DWORD> m_DwmGetWindowAttribute;
 	};
 }
 
-#endif
+#endif // _WIN32
 
 #endif // BEARLIBTERMINAL_WINAPIWINDOW_HPP

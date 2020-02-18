@@ -116,14 +116,14 @@ void TestDynamicSprites()
 
 		terminal_setf
 		(
-			"U+E100: %#p, size=%dx%d, resize=%dx%d, resize-filter=nearest",
+			"U+E100: %#p, raw-size=%dx%d, resize=%dx%d, resize-filter=nearest",
 			(void*)minimap.data(),
 			map_width, map_height,
 			map_width*4, map_height*4
 		);
 	};
 
-	for (bool proceed=true; proceed;)
+	while (true)
 	{
 		terminal_clear();
 
@@ -140,32 +140,28 @@ void TestDynamicSprites()
 
 		terminal_refresh();
 
-		do
-		{
-			int key = terminal_read();
+		int key = terminal_read();
 
-			if (key == TK_CLOSE || key == TK_ESCAPE)
-			{
-				proceed = false;
-			}
-			else if (key == TK_RIGHT && (x0 < map_width-view_width))
-			{
-				x0 += 1;
-			}
-			else if (key == TK_LEFT && x0 > 0)
-			{
-				x0 -= 1;
-			}
-			else if (key == TK_DOWN && (y0 < map_height-view_height))
-			{
-				y0 += 1;
-			}
-			else if (key == TK_UP && y0 > 0)
-			{
-				y0 -= 1;
-			}
+		if (key == TK_CLOSE || key == TK_ESCAPE)
+		{
+			break;
 		}
-		while (proceed && terminal_has_input());
+		else if (key == TK_RIGHT && (x0 < map_width-view_width))
+		{
+			x0 += 1;
+		}
+		else if (key == TK_LEFT && x0 > 0)
+		{
+			x0 -= 1;
+		}
+		else if (key == TK_DOWN && (y0 < map_height-view_height))
+		{
+			y0 += 1;
+		}
+		else if (key == TK_UP && y0 > 0)
+		{
+			y0 -= 1;
+		}
 	}
 
 	terminal_set("U+E000: none; U+E100: none;");

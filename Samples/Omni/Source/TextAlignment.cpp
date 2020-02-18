@@ -8,6 +8,7 @@
 #include "Common.hpp"
 
 #include <cmath>
+#include <map>
 
 namespace { // anonymous
 
@@ -52,16 +53,21 @@ void TestTextAlignment()
 	terminal_set("window.title='Omni: text alignment', resizeable=true, minimum-size=44x12");
 	terminal_composition(TK_ON);
 
-	Alignment horisontal_shift[] = {Left, Left, Center, Right, Right};
-	Alignment vertical_shift[] = {Top, Top, Center, Bottom, Bottom};
-	const char* horisontal_names[] = {"", "left", "center", "right"};
-	const char* vertical_names[] = {"", "top", "center", "bottom"};
-	Alignment horisontal = Left;
-	Alignment vertical = Top;
+	std::map<int, std::string> names =
+	{
+		{TK_ALIGN_LEFT, "TK_ALIGN_LEFT"},
+		{TK_ALIGN_CENTER, "TK_ALIGN_CENTER"},
+		{TK_ALIGN_RIGHT, "TK_ALIGN_RIGHT"},
+		{TK_ALIGN_TOP, "TK_ALIGN_TOP"},
+		{TK_ALIGN_MIDDLE, "TK_ALIGN_MIDDLE"},
+		{TK_ALIGN_BOTTOM, "TK_ALIGN_BOTTOM"},
+	};
+	int horisontal_align = TK_ALIGN_LEFT;
+	int vertical_align = TK_ALIGN_TOP;
 
 	UpdateGeometry();
 
-	for (bool proceed=true; proceed;)
+	while (true)
 	{
 		terminal_clear();
 
@@ -76,83 +82,48 @@ void TestTextAlignment()
 			frame_left,
 			frame_top - padding_v - 2,
 			"Use arrows to change text alignment.\n"
-			"Current alignment is [c=orange]%s-%s[/c].",
-			vertical_names[(int)vertical], horisontal_names[(int)horisontal]
+			"Current alignment is [c=orange]%s[/c] | [c=orange]%s[/c].",
+			names[vertical_align].c_str(),
+			names[horisontal_align].c_str()
 		);
 
 		// Text origin
-		int x, y;
-
-		switch (horisontal)
-		{
-		case Right:
-			x = frame_left + frame_width - 1;
-			break;
-		case Center:
-			x = frame_left + frame_width / 2;
-			break;
-		default: // Left
-			x = frame_left;
-			break;
-		}
-
-		switch (vertical)
-		{
-		case Bottom:
-			y = frame_top + frame_height - 1;
-			break;
-		case Center:
-			y = frame_top + frame_height / 2;
-			break;
-		default: // Top
-			y = frame_top;
-			break;
-		}
-
-		terminal_color("darkest orange");
-		terminal_put(x, y, 0x2588);
+		int x = frame_left, y = frame_top;
 
 		terminal_color("white");
-		terminal_printf
-		(
-			x, y,
-			"[wrap=%dx%d][align=%s-%s]%s",
-			frame_width, frame_height,
-			vertical_names[(int)vertical], horisontal_names[(int)horisontal],
-			lorem_ipsum
-		);
+		terminal_print_ext(x, y, frame_width, frame_height, vertical_align | horisontal_align, lorem_ipsum);
+
+		terminal_print(80-14, 3, "[c=orange][U+2588]");
+		terminal_print_ext(80-14, 3, 0, 0, vertical_align | horisontal_align, "12345\nabc\n-=#=-");
 
 		terminal_refresh();
 
-		do
+		int key = terminal_read();
+
+		if (key == TK_CLOSE || key == TK_ESCAPE)
 		{
-			int key = terminal_read();
-			if (key == TK_CLOSE || key == TK_ESCAPE)
-			{
-				proceed = false;
-			}
-			else if (key == TK_LEFT)
-			{
-				horisontal = horisontal_shift[(int)horisontal-1];
-			}
-			else if (key == TK_RIGHT)
-			{
-				horisontal = horisontal_shift[(int)horisontal+1];
-			}
-			else if (key == TK_UP)
-			{
-				vertical = vertical_shift[(int)vertical-1];
-			}
-			else if (key == TK_DOWN)
-			{
-				vertical = vertical_shift[(int)vertical+1];
-			}
-			else if (key == TK_RESIZED)
-			{
-				UpdateGeometry();
-			}
+			break;
 		}
-		while (proceed && terminal_has_input());
+		else if (key == TK_LEFT)
+		{
+			horisontal_align = (horisontal_align == TK_ALIGN_RIGHT)? TK_ALIGN_CENTER: TK_ALIGN_LEFT;
+		}
+		else if (key == TK_RIGHT)
+		{
+			horisontal_align = (horisontal_align == TK_ALIGN_LEFT)? TK_ALIGN_CENTER: TK_ALIGN_RIGHT;
+		}
+		else if (key == TK_UP)
+		{
+			vertical_align = (vertical_align == TK_ALIGN_BOTTOM)? TK_ALIGN_MIDDLE: TK_ALIGN_TOP;
+		}
+		else if (key == TK_DOWN)
+		{
+			vertical_align = (vertical_align == TK_ALIGN_TOP)? TK_ALIGN_MIDDLE: TK_ALIGN_BOTTOM;
+		}
+		else if (key == TK_RESIZED)
+		{
+			UpdateGeometry();
+		}
 	}
 
 	terminal_composition(TK_OFF);

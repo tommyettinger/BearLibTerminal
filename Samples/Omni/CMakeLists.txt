@@ -1,3 +1,9 @@
+cmake_minimum_required(VERSION 2.8)
+
+if (UNIX AND NOT APPLE)
+	set(LINUX TRUE)
+endif()
+
 project(SampleOmni)
 
 set(CMAKE_SKIP_RPATH TRUE)
@@ -8,7 +14,7 @@ math(EXPR BITNESS "8*${CMAKE_SIZEOF_VOID_P}")
 # Release flags
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g0")
 if(NOT APPLE)
-        set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-s")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-s")
 endif()
 
 # Debug flags
@@ -45,15 +51,15 @@ set(SOURCE_FILES ./Source/Main.cpp
                  ./Source/TextInput.cpp
                  ./Source/InputFiltering.cpp
                  ./Source/WindowResize.cpp
-                 ./Source/Pick.cpp
-                 ./Source/MacOSMain.mm)
+                 ./Source/Pick.cpp)
+
+set(HEADER_FILES ./Source/Common.hpp)
 
 include_directories(${CMAKE_SOURCE_DIR}/Terminal/Include/C)
-add_executable(SampleOmni ${SOURCE_FILES})
-if(APPLE)
-        target_link_libraries(SampleOmni BearLibTerminal)
-else()
-        target_link_libraries(SampleOmni BearLibTerminal -Wl,-R.)
+add_executable(SampleOmni ${SOURCE_FILES} ${HEADER_FILES})
+target_link_libraries(SampleOmni BearLibTerminal)
+if (LINUX)
+    target_link_libraries(SampleOmni -Wl,-R.)
 endif()
 if(WIN32)
 	target_link_libraries(SampleOmni winmm.lib)

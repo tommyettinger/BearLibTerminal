@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -74,7 +74,7 @@ namespace BearLibTerminal
 		std::wstring GetName() const;
 	};
 
-	static const uint16_t kUnicodeReplacementCharacter = 0xFFFD;
+	static const char32_t kUnicodeReplacementCharacter = 0xFFFD;
 
 	template<typename T> struct Encodings
 	{ };

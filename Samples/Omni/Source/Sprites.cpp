@@ -22,7 +22,7 @@ void TestSprites()
 		color_from_argb(128, 64, 64, 192),
 		color_from_argb(128, 192, 192, 64)
 	};
-	terminal_setf("U+E003: %#p, size=2x2, resize=128x128, resize-filter=bicubic", &c);
+	terminal_setf("U+E003: %#p, raw-size=2x2, resize=128x128, resize-filter=bicubic", &c);
 
 	terminal_clear();
 
@@ -39,11 +39,16 @@ void TestSprites()
 	terminal_put(5+18*1, 14, 0xE002); // FiveElements
 	terminal_put(5+18*2, 14, 0xE003); // Gradient
 
-	for (bool proceed=true; proceed;)
+	terminal_refresh();
+
+	while (true)
 	{
-		terminal_refresh();
 		int key = terminal_read();
-		if (key == TK_CLOSE || key == TK_ESCAPE) proceed = false;
+
+		if (key == TK_CLOSE || key == TK_ESCAPE)
+		{
+			break;
+		}
 	}
 
 	terminal_set("U+E000: none; U+E001: none; U+E002: none; U+E003: none");

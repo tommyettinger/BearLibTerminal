@@ -1,9 +1,24 @@
 /*
- * Encoding.cpp
- *
- *  Created on: Oct 20, 2013
- *      Author: Cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2016 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #include "Encoding.hpp"
 #include "Resource.hpp"
@@ -74,24 +89,20 @@ namespace BearLibTerminal
 
 		auto parse_point = [](const std::wstring& s) -> int
 		{
-			if (s.length() == 1)
-			{
-				// Single character notation
-				return (int)s[0];
-			}
+			int result = 0;
 
-			if (s.length() > 2)
+			if (s.length() > 2 && (((s[0] == L'u' || s[0] == L'U') && s[1] == '+') || ((s[0] == L'0' && s[1] == L'x'))))
 			{
-				// Hexadecimal notation
-				if (((s[0] == L'u' || s[0] == L'U') && s[1] == '+') || // U+1234
-				    ((s[0] == L'0' && (s[1] == L'x'))))                // 0x1234
-				{
-					int result = 0;
-					std::wistringstream ss(s.substr(2));
-					ss >> std::hex;
-					ss >> result;
-					return ss? result: -2;
-				}
+				// Hexadecimal notation: U+1234 or 0x1234.
+				std::wistringstream ss(s.substr(2));
+				ss >> std::hex;
+				ss >> result;
+				return ss? result: -2;
+			}
+			else
+			{
+				// Decimal notation.
+				return try_parse(s, result)? result: -2;
 			}
 
 			return -1;
@@ -140,7 +151,7 @@ namespace BearLibTerminal
 			for (const wchar_t* p = line.c_str(); ; p++)
 			{
 				if (read_set(p), *p == L'\0')
-				break;
+					break;
 			}
 		}
 	}
@@ -402,12 +413,10 @@ namespace BearLibTerminal
 		}
 		else
 		{
-			auto stream = Resource::Open(name, L"codepage-");
-			if (!stream)
-			{
-				throw std::runtime_error("failed to locate codepage resource for \"" + UTF8Encoding().Convert(name) + "\"");
-			}
-			return std::unique_ptr<Encoding8>(new CustomCodepage(name, *stream));
+			auto data = Resource::Open(name, L"codepage-");
+			// FIXME: load from string directly.
+			std::istringstream stream{std::string{(const char*)&data[0], data.size()}};
+			return std::unique_ptr<Encoding8>(new CustomCodepage(name, stream));
 		}
 	}
 }

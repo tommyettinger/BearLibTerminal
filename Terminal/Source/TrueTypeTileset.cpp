@@ -1,9 +1,24 @@
 /*
- * FreeTypeTileset.cpp
- *
- *  Created on: Nov 7, 2013
- *      Author: cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2017 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #include "TrueTypeTileset.hpp"
 #include "Geometry.hpp"
@@ -15,115 +30,97 @@
 
 namespace BearLibTerminal
 {
-	TrueTypeTileset::TrueTypeTileset(TileContainer& container, OptionGroup& group):
-		StronglyTypedReloadableTileset(container),
-		m_base_code(0),
-		m_alignment(Tile::Alignment::Unknown),
+	TrueTypeTileset::TrueTypeTileset(char32_t offset, std::vector<uint8_t> data, OptionGroup& options):
+		Tileset(offset),
+		m_alignment(TileAlignment::Center),
+		m_font_data(std::move(data)),
 		m_font_library(nullptr),
 		m_font_face(nullptr),
 		m_render_mode(FT_RENDER_MODE_NORMAL),
-		m_monospace(false)
+		m_hinting(FT_LOAD_DEFAULT),
+		m_use_box_drawing(false),
+		m_use_block_elements(false)
 	{
-		if (group.name != L"font" && !try_parse(group.name, m_base_code))
-		{
-			throw std::runtime_error("TrueTypeTileset: failed to parse base code");
-		}
-
-		if (!group.attributes.count(L"") || group.attributes[L""].empty())
-		{
-			throw std::runtime_error("TrueTypeTileset: missing or empty main value attribute");
-		}
-
-		if (group.attributes.count(L"bbox") && !try_parse(group.attributes[L"bbox"], m_bbox_size))
-		{
-			throw std::runtime_error("TrueTypeTileset: failed to parse 'bbox' attribute");
-		}
-
-		if (group.attributes.count(L"spacing") && !try_parse(group.attributes[L"spacing"], m_bbox_size))
-		{
+		if (options.attributes.count(L"spacing") && !try_parse(options.attributes[L"spacing"], m_spacing))
 			throw std::runtime_error("TrueTypeTileset: failed to parse 'spacing' attribute");
-		}
 
-		if (m_bbox_size.width < 1 || m_bbox_size.height < 1)
-		{
-			m_bbox_size = Size(1, 1);
-		}
+		if (m_spacing.width < 1 || m_spacing.height < 1)
+			m_spacing = Size{1, 1};
 
-		if (group.attributes.count(L"codepage"))
-		{
-			m_codepage = GetUnibyteEncoding(group.attributes[L"codepage"]); // Should either return an encoding or throw
-		}
+		if (options.attributes.count(L"codepage"))
+			m_codepage = GetUnibyteEncoding(options.attributes[L"codepage"]); // Should either return an encoding or throw
 		else
+			m_codepage = GetUnibyteEncoding(L"utf8");
+
+		if (options.attributes.count(L"align") && !try_parse(options.attributes[L"align"], m_alignment))
 		{
-			m_codepage = GetUnibyteEncoding(m_base_code == 0? L"utf8": L"ascii");
+			throw std::runtime_error("TrueTypeTileset: failed to parse 'align' attribute");
 		}
 
-		if (group.attributes.count(L"align") && !try_parse(group.attributes[L"align"], m_alignment))
+		if (options.attributes.count(L"mode"))
 		{
-			throw std::runtime_error("TrueTypeTileset: failed to parse 'alignemnt' attribute");
-		}
-
-		if (group.attributes.count(L"mode"))
-		{
-			std::wstring mode_str = group.attributes[L"mode"];
+			std::wstring mode_str = options.attributes[L"mode"];
 			if (mode_str == L"normal")
-			{
 				m_render_mode = FT_RENDER_MODE_NORMAL;
-			}
 			else if (mode_str == L"monochrome")
-			{
 				m_render_mode = FT_RENDER_MODE_MONO;
-			}
 			else if (mode_str == L"lcd")
-			{
 				m_render_mode = FT_RENDER_MODE_LCD;
-			}
 			else
-			{
 				throw std::runtime_error("TrueTypeTileset: failed to parse 'mode' attribute");
-			}
 		}
 
-		if (group.attributes.count(L"size"))
+		if (options.attributes.count(L"hinting"))
 		{
-			std::wstring size_str = group.attributes[L"size"];
-			if (size_str.find(L"x") != std::wstring::npos)
-			{
-				if (!try_parse(size_str, m_tile_size))
-				{
-					throw std::runtime_error("TrueTypeTileset: failed to parse 'size' attribute");
-				}
-			}
+			std::wstring mode_str = options.attributes[L"hinting"];
+			if (mode_str == L"normal")
+				m_hinting = FT_LOAD_DEFAULT;
+			else if (mode_str == L"autohint")
+				m_hinting = FT_LOAD_FORCE_AUTOHINT;
+			else if (mode_str == L"none")
+				m_hinting = FT_LOAD_NO_HINTING;
 			else
-			{
-				if (!try_parse(size_str, m_tile_size.height))
-				{
-					throw std::runtime_error("TrueTypeTileset: failed to parse 'size' attribute");
-				}
-			}
+				throw std::runtime_error("TrueTypeTileset: failed to parse 'hinting' attribute");
+		}
 
-			if (m_tile_size.width < 0 || m_tile_size.height < 1)
-			{
-				throw std::runtime_error("TrueTypeTileset: size " + UTF8Encoding().Convert(group.attributes[L"size"]) + " is out of acceptable range");
-			}
+		if (!options.attributes.count(L"size"))
+			throw std::runtime_error("TrueTypeTileset: missing 'size' attribute");
+
+		std::wstring size_str = options.attributes[L"size"];
+		if (size_str.find(L"x") != std::wstring::npos)
+		{
+			if (!try_parse(size_str, m_tile_size))
+				throw std::runtime_error("TrueTypeTileset: failed to parse 'size' attribute");
 		}
 		else
 		{
-			throw std::runtime_error("TrueTypeTileset: missing 'size' attribute");
+			if (!try_parse(size_str, m_tile_size.height))
+				throw std::runtime_error("TrueTypeTileset: failed to parse 'size' attribute");
 		}
+
+		if (m_tile_size.width < 0 || m_tile_size.height < 1)
+			throw std::runtime_error("TrueTypeTileset: size " + UTF8Encoding().Convert(options.attributes[L"size"]) + " is out of acceptable range");
+
+		if (options.attributes.count(L"use-box-drawing") && !try_parse(options.attributes[L"use-box-drawing"], m_use_box_drawing))
+			throw std::runtime_error("TrueTypeTileset: failed to parse 'use-box-drawing' attribute");
+
+		if (options.attributes.count(L"use-block-elements") && !try_parse(options.attributes[L"use-block-elements"], m_use_block_elements))
+			throw std::runtime_error("TrueTypeTileset: failed to parse 'use-block-elements' attribute");
 
 		// Trying to initialize FreeType
-
-		if (FT_Init_FreeType(&m_font_library))
-		{
+		m_font_library = std::shared_ptr<FT_Library>(
+			new FT_Library(),
+			[](FT_Library* p){FT_Done_FreeType(*p); delete p;}
+		);
+		if (FT_Init_FreeType(m_font_library.get()))
 			throw std::runtime_error("TrueTypeTileset: can't initialize Freetype");
-		}
 
-		std::string filename_u8 = UTF8Encoding().Convert(group.attributes[L""]);
-		if (FT_New_Face(m_font_library, filename_u8.c_str(), 0, &m_font_face))
-		{
-			throw std::runtime_error("TrueTypeTileset: can't load font from file \"" + filename_u8 + "\"");
-		}
+		m_font_face = std::shared_ptr<FT_Face>(
+			new FT_Face(),
+			[](FT_Face* p){FT_Done_Face(*p); delete p;}
+		);
+		if (FT_New_Memory_Face(*m_font_library, &m_font_data[0], m_font_data.size(), 0, m_font_face.get()))
+			throw std::runtime_error("TrueTypeTileset: can't load font from buffer");
 
 		int hres = 64;
 		FT_Matrix matrix =
@@ -133,42 +130,37 @@ namespace BearLibTerminal
 			(int)((0.0)      * 0x10000L),
 			(int)((1.0)      * 0x10000L)
 		};
-		FT_Set_Transform(m_font_face, &matrix, NULL);
+		FT_Set_Transform(*m_font_face, &matrix, NULL);
 
-		auto get_metrics = [&](uint16_t code) -> FT_Glyph_Metrics
+		auto get_metrics = [&](char32_t code) -> FT_Glyph_Metrics
 		{
-			if (FT_Load_Glyph(m_font_face, FT_Get_Char_Index(m_font_face, code), 0))
-			{
+			if (FT_Load_Glyph(*m_font_face, FT_Get_Char_Index(*m_font_face, code), 0))
 				throw std::runtime_error("TrueTypeTileset: glyph loading error");
-			}
-			return m_font_face->glyph->metrics;
+			return (*m_font_face)->glyph->metrics;
 		};
 
-		uint16_t reference_code = m_codepage->Convert((int)'@');
+		char32_t reference_code = m_codepage->Convert((int)'@');
 		if (reference_code == kUnicodeReplacementCharacter)
 		{
 			// Use first character for size reference if font has custom codepage w/o 0x40 code point
 			reference_code = m_codepage->Convert(0);
 		}
-		if (group.attributes.count(L"size-reference") && !try_parse(group.attributes[L"size-reference"], reference_code))
-		{
+
+		if (options.attributes.count(L"size-reference") && !try_parse(options.attributes[L"size-reference"], reference_code))
 			throw std::runtime_error("TrueTypeTileset: can't parse 'size-reference' attribute");
-		}
 
 		if (m_tile_size.width == 0)
 		{
 			// Only height was specified, e. g. size=12
 
-			if (FT_Set_Char_Size(m_font_face, 0, (uint32_t)(m_tile_size.height*64), 96*hres, 96))
-			{
+			if (FT_Set_Char_Size(*m_font_face, 0, (uint32_t)(m_tile_size.height*64), 96*hres, 96))
 				throw std::runtime_error("TrueTypeTileset: can't setup font size");
-			}
 
 			int dot_width = (int)std::ceil(get_metrics('.').horiAdvance/64.0f/64.0f);
 			int at_width = (int)std::ceil(get_metrics(reference_code).horiAdvance/64.0f/64.0f);
 			m_monospace = dot_width == at_width;
 
-			int height = m_font_face->size->metrics.height >> 6;
+			int height = (*m_font_face)->size->metrics.height >> 6;
 			int width = at_width;
 
 			m_tile_size = Size(width, height);
@@ -182,15 +174,13 @@ namespace BearLibTerminal
 
 			auto get_size = [&](float height) -> Size
 			{
-				if (FT_Set_Char_Size(m_font_face, 0, (uint32_t)(height*64), 96*hres, 96))
-				{
+				if (FT_Set_Char_Size(*m_font_face, 0, (uint32_t)(height*64), 96*hres, 96))
 					throw std::runtime_error("TrueTypeTileset: can't setup font size");
-				}
 
 				int w = (int)std::ceil(get_metrics(reference_code).horiAdvance/64.0f/64.0f);
-				int h = m_font_face->size->metrics.height >> 6;
+				int h = (*m_font_face)->size->metrics.height >> 6;
 
-				return Size(w, h);
+				return Size{w, h};
 			};
 
 			float left = 1.0f;
@@ -230,154 +220,90 @@ namespace BearLibTerminal
 			int at_width = (int)std::ceil(get_metrics(reference_code).horiAdvance/64.0f/64.0f);
 			m_monospace = dot_width == at_width;
 
-			int height = m_font_face->size->metrics.height >> 6;
-			int width = at_width;
-
-			//m_tile_size = Size(width, height);
+			//int height = (*m_font_face)->size->metrics.height >> 6;
+			//int width = at_width;
 
 			LOG(Trace, "Font tile size is " << m_tile_size << ", font is " << (m_monospace? "monospace": "not monospace"));
 		}
 
 		if (m_render_mode == FT_RENDER_MODE_LCD)
 		{
-			FT_Library_SetLcdFilter(m_font_library, FT_LCD_FILTER_DEFAULT);
-			FT_Library_SetLcdFilterWeights(m_font_library, (unsigned char*)"\x20\x70\x70\x70\x20");
+			FT_Library_SetLcdFilter(*m_font_library, FT_LCD_FILTER_DEFAULT);
+			FT_Library_SetLcdFilterWeights(*m_font_library, (unsigned char*)"\x20\x70\x70\x70\x20");
 		}
 
-		if (m_alignment == Tile::Alignment::Unknown)
+		if (m_alignment == TileAlignment::Unknown)
+			m_alignment = TileAlignment::Center;
+	}
+
+	FT_UInt TrueTypeTileset::GetGlyphIndex(char32_t code)
+	{
+		if (code < m_offset)
+			return 0;
+
+		if (Tileset::IsFontOffset(m_offset))
 		{
-			m_alignment = Tile::Alignment::Center;
+			// Font
+			char32_t char_code = (code & Tileset::kCharOffsetMask);
+			return FT_Get_Char_Index(*m_font_face, char_code);
+		}
+		else
+		{
+			// Tileset
+			int index = code - m_offset;
+			char32_t char_code = m_codepage->Convert(index);
+			if (char_code == kUnicodeReplacementCharacter)
+				return 0;
+			return FT_Get_Char_Index(*m_font_face, char_code);
 		}
 	}
 
-	TrueTypeTileset::~TrueTypeTileset()
+	bool TrueTypeTileset::Provides(char32_t code)
 	{
-		Dispose();
-	}
-
-	void TrueTypeTileset::Dispose()
-	{
-		if (m_font_face)
+		char32_t relative_code = (code & Tileset::kCharOffsetMask);
+		if (Tileset::IsFontOffset(m_offset))
 		{
-			FT_Done_Face(m_font_face);
-			m_font_face = nullptr;
-		}
-
-		if (m_font_library)
-		{
-			FT_Done_FreeType(m_font_library);
-			m_font_library = nullptr;
-		}
-	}
-
-	void TrueTypeTileset::Remove()
-	{
-		for (auto i: m_tiles) // TODO: move to base class
-		{
-			if (m_container.slots.count(i.first) && m_container.slots[i.first].get() == i.second.get())
+			// TrueType fonts do not provide Box Drawing and Block Elements characters by default.
+			if ((relative_code >= 0x2500 && relative_code <= 0x257F && !m_use_box_drawing) ||
+			    (relative_code >= 0x2580 && relative_code <= 0x259F && !m_use_block_elements))
 			{
-				m_container.slots.erase(i.first);
+				return false;
 			}
-
-			m_container.atlas.Remove(i.second);
 		}
 
-		m_tiles.clear();
+		return GetGlyphIndex(code) > 0;
 	}
 
-	bool TrueTypeTileset::Save()
+	std::shared_ptr<TileInfo> TrueTypeTileset::Get(char32_t code)
 	{
-		// Do nothing. TrueType tileset is a dynamic tileset and provides tiles on-demand.
-		return true;
-	}
+		if (auto cached = Tileset::Get(code))
+			return cached;
 
-	void TrueTypeTileset::Reload(TrueTypeTileset&& tileset)
-	{
-		// Clean
-		Remove();
-		Dispose();
-
-		// Steal
-		m_tile_size = tileset.m_tile_size;
-		m_bbox_size = tileset.m_bbox_size;
-		m_codepage = std::move(tileset.m_codepage);
-		m_alignment = tileset.m_alignment;
-		m_font_library = tileset.m_font_library;
-		m_font_face = tileset.m_font_face;
-		m_render_mode = tileset.m_render_mode;
-		m_monospace = tileset.m_monospace;
-		tileset.m_font_library = nullptr;
-		tileset.m_font_face = nullptr;
-
-		// Apply
-		Save();
-	}
-
-	Size TrueTypeTileset::GetBoundingBoxSize()
-	{
-		return m_tile_size;
-	}
-
-	Size TrueTypeTileset::GetSpacing()
-	{
-		return m_bbox_size;
-	}
-
-	const Encoding<char>* TrueTypeTileset::GetCodepage()
-	{
-		return m_codepage.get();
-	}
-
-	Tileset::Type TrueTypeTileset::GetType()
-	{
-		return Type::TrueType;
-	}
-
-	bool TrueTypeTileset::Provides(uint16_t code)
-	{
-		if (code < m_base_code) return false;
-		uint16_t unicode = m_codepage->Convert((int)(code-m_base_code));
-		if (unicode == kUnicodeReplacementCharacter) return false;
-		return FT_Get_Char_Index(m_font_face, unicode) > 0;
-	}
-
-	void TrueTypeTileset::Prepare(uint16_t code)
-	{
-		if (code < m_base_code)
-		{
+		FT_UInt index = GetGlyphIndex(code);
+		if (index == 0)
 			throw std::runtime_error("TrueTypeTileset: request for a tile that is not provided by the tileset");
-		}
 
-		int index = 0;
-		uint16_t unicode = m_codepage->Convert((int)(code-m_base_code));
-		if (unicode == kUnicodeReplacementCharacter || (index = FT_Get_Char_Index(m_font_face, unicode)) == 0)
-		{
-			throw std::runtime_error("TrueTypeTileset: request for a tile that is not provided by the tileset");
-		}
-
-		if (FT_Load_Glyph(m_font_face, index, FT_LOAD_FORCE_AUTOHINT))
-		{
+		if (FT_Load_Glyph(*m_font_face, index, m_hinting))
 			throw std::runtime_error("TrueTypeTileset: can't load character glyph");
-		}
 
-		if (m_font_face->glyph->format != FT_GLYPH_FORMAT_BITMAP)
+		if ((*m_font_face)->glyph->format != FT_GLYPH_FORMAT_BITMAP)
 		{
 			FT_Render_Mode render_mode = m_render_mode;
 
-			if (FT_Render_Glyph(m_font_face->glyph, render_mode) != 0)
+			if (FT_Render_Glyph((*m_font_face)->glyph, render_mode) != 0)
 			{
 				throw std::runtime_error("TrueTypeTileset: can't render glyph");
 			}
 		}
 
-		FT_GlyphSlot& slot = m_font_face->glyph;
+		FT_GlyphSlot& slot = (*m_font_face)->glyph;
 
 		int rows = slot->bitmap.rows;
 		int columns = 0;
 		int pixel_size = 0;
 
-		int height = m_font_face->size->metrics.height >> 6;
-		int descender = m_font_face->size->metrics.descender >> 6;
+		int height = (*m_font_face)->size->metrics.height >> 6;
+		int descender = (*m_font_face)->size->metrics.descender >> 6;
 		int bx = (slot->metrics.horiBearingX >> 6) / 64;
 		int by = slot->metrics.horiBearingY >> 6;
 
@@ -425,37 +351,43 @@ namespace BearLibTerminal
 			}
 		}
 
-		int descender2 = m_font_face->size->metrics.descender >> 6;
-		int dy = -((by-descender2) - m_tile_size.height/2);
+		int descender2 = (*m_font_face)->size->metrics.descender >> 6;
+		float wff = slot->metrics.horiAdvance / 4096.0f;
+		float hff = (*m_font_face)->size->metrics.height / 64.0f;
+		int dy = -((by-descender2) - hff/2);
 		Point offset;
-		if (m_alignment == Tile::Alignment::Center)
+		if (m_alignment == TileAlignment::Center)
 		{
-			if (m_monospace)
-			{
-				offset = Point(-m_tile_size.width/2+bx, dy);
-			}
-			else
-			{
-				offset = Point(-(columns+bx)/2, dy);
-			}
+			int dx = -std::round((wff + 0.5f) / 2.0f) + bx;
+			offset = Point(dx, dy);
+		}
+		else if (m_alignment == TileAlignment::DeadCenter)
+		{
+			Point center = glyph.CenterOfMass();
+			offset = Point(-center.x, -center.y);
 		}
 		else
 		{
 			if (m_monospace)
-			{
 				offset = Point(bx, m_tile_size.height/2+dy);
-			}
 			else
-			{
 				offset = Point(m_tile_size.width/2-(columns+bx)/2, m_tile_size.height/2+dy);
-			}
 		}
 
-		auto tile_slot = m_container.atlas.Add(glyph, Rectangle(glyph.GetSize()));
-		tile_slot->offset = offset;
-		tile_slot->alignment = m_alignment;
-		tile_slot->bounds = m_bbox_size;
-		m_tiles[code] = tile_slot;
-		m_container.slots[code] = tile_slot;
+		auto tile = std::make_shared<TileInfo>();
+		tile->tileset = this;
+		tile->bitmap = glyph;
+		tile->offset = offset;
+		tile->alignment = m_alignment;
+		tile->spacing = m_spacing;
+		m_cache[code] = tile;
+
+		return tile;
+	}
+
+	Size TrueTypeTileset::GetBoundingBoxSize()
+	{
+		return m_tile_size;
 	}
 }
+

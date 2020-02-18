@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2015 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -121,6 +121,19 @@ namespace BearLibTerminal
 			result.width = std::min(right, other_right) - result.left;
 			result.height = std::min(bottom, other_bottom) - result.top;
 			return result;
+		}
+
+		BasicPoint<T> Clamp(BasicPoint<T> point) const
+		{
+			if (point.x < left)
+				point.x = left;
+			if (point.y < top)
+				point.y = top;
+			if (point.x >= left + width)
+				point.x = left + width - 1;
+			if (point.y >= top + height)
+				point.y = top + height - 1;
+			return point;
 		}
 
 		template<typename U> BasicRectangle<T> operator+(BasicPoint<U> offset) const

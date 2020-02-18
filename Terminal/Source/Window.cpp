@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -28,17 +28,15 @@
 #include "WinApiWindow.hpp"
 #endif
 #if defined(__APPLE__)
-#include "MacOSWindow.h"
+#include "CocoaWindow.h"
 #endif
 #include "Log.hpp"
-#include <future>
-#include <stdexcept>
+#include "Utility.hpp"
 
 namespace BearLibTerminal
 {
-	Window::Window():
-		m_event_handler_is_set(false),
-		m_proceed(false),
+	Window::Window(EventHandler handler):
+		m_event_handler(handler),
 		m_minimum_size(1, 1),
 		m_fullscreen(false),
 		m_resizeable(false)
@@ -46,17 +44,6 @@ namespace BearLibTerminal
 
 	Window::~Window()
 	{ }
-
-	void Window::SetEventHandler(EventHandler handler)
-	{
-		m_event_handler = handler;
-		m_event_handler_is_set = true;
-	}
-
-	int Window::Handle(Event event)
-	{
-		return m_event_handler_is_set? m_event_handler(std::move(event)): 0;
-	}
 
 	void Window::SetSizeHints(Size increment, Size minimum_size)
 	{
@@ -67,95 +54,26 @@ namespace BearLibTerminal
 		if (m_minimum_size.height < 1) m_minimum_size.height = 1;
 	}
 
-	Size Window::GetClientSize()
-	{
-		return m_client_size;
-	}
-
-	void Window::ToggleFullscreen()
-	{ }
-
 	bool Window::IsFullscreen() const
 	{
 		return m_fullscreen;
 	}
 
-	void Window::Invoke(std::function<void()> func)
+	std::wstring Window::GetClipboard()
 	{
-		Post(std::move(func)).get();
+		return std::wstring{};
 	}
 
-	void Window::Run()
+	std::unique_ptr<Window> Window::Create(EventHandler handler)
 	{
-		auto thread_function = [&](std::shared_ptr<std::promise<bool>> promise)
-		{
-			try
-			{
-				try
-				{
-					Construct();
-					promise->set_value(true);
-				}
-				catch(...)
-				{
-					promise->set_exception(std::current_exception());
-					return;
-				}
-
-				ThreadFunction();
-				Handle(TK_DESTROY);
-			}
-			catch (std::exception& e)
-			{
-				// By the time execution falls here, Run method has already finished.
-				// So there is no one to relay exception to.
-				LOG(Error, "Window thread has thrown an exception: " << e.what());
-			}
-
-			Destroy();
-		};
-
-		// --------------------------------------------------------------------
-
-		try
-		{
-			auto promise = std::make_shared<std::promise<bool>>();
-			auto result = promise->get_future();
-			m_thread = std::thread(thread_function, promise);
-			result.get(); // This will either get 'true' or throw an exception
-		}
-		catch(std::exception& e)
-		{
-			throw std::runtime_error(std::string("window initialization has failed: ") + e.what());
-		}
-	}
-
-	void Window::Stop()
-	{
-		LOG(Trace, "Window::Stop()");
-		m_proceed = false;
-
-		if (m_thread.joinable())
-		{
-			m_thread.join();
-		}
-	}
-
-	std::unique_ptr<Window> Window::Create()
-	{
-		std::unique_ptr<Window> result;
-
 #if defined(__linux)
-		result.reset(new X11Window());
+		return std::make_unique<X11Window>(handler);
 #endif
 #if defined(_WIN32)
-		result.reset(new WinApiWindow());
+		return std::make_unique<WinApiWindow>(handler);
 #endif
 #if defined(__APPLE__)
-		result.reset(new MacOSWindow());
+        return std::make_unique<CocoaWindow>(handler);
 #endif
-
-		result->Run();
-		return std::move(result);
-	}
+    }
 }

@@ -11,6 +11,11 @@
 #include <vector>
 #include <set>
 #include <iostream>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <sys/param.h>
+#include <unistd.h>
+#endif
 
 struct TestEntry
 {
@@ -20,18 +25,32 @@ struct TestEntry
 
 TERMINAL_TAKE_CARE_OF_WINMAIN
 
-#if defined(__APPLE__)
-#include <dispatch/dispatch.h>
-int entry()
-#else
 int main()
-#endif
 {
+#if defined(__APPLE__)
+	char path[MAXPATHLEN] = {0};
+	uint32_t bufsize = MAXPATHLEN;
+	_NSGetExecutablePath(path, &bufsize);
+	for (int i = bufsize-1; i >= 0; i--)
+	{
+		if (path[i] == '/')
+		{
+				path[i] = '\0';
+				break;
+		}
+	}
+	chdir(path);
+#endif
+
 	terminal_open();
 
 	auto reset = []()
 	{
-		terminal_set("window: size=80x25, cellsize=auto, title='Omni: menu'; font: default");
+		terminal_set(
+			"window: size=80x25, cellsize=auto, title='Omni: menu';"
+			"font: default;"
+			"input: filter={keyboard}"
+		);
 		terminal_color("white");
 	};
 
@@ -62,7 +81,7 @@ int main()
 
 	reset();
 
-	for (bool proceed=true; proceed;)
+	while (true)
 	{
 		terminal_clear();
 		for (size_t i=0; i<entries.size(); i++)
@@ -71,27 +90,25 @@ int main()
 			terminal_printf(2, 1+i, "[color=orange]%c.[/color] %s%s", shortcut, entries[i].func? "": "[color=gray]", entries[i].name);
 		}
 		terminal_printf(2, 23, "[color=orange]ESC.[/color] Exit");
+		terminal_printf_ext(77, 22, 0, 0, TK_ALIGN_RIGHT, "library version %s", terminal_get("version"));
+		terminal_printf_ext(77, 23, 0, 0, TK_ALIGN_RIGHT, "http://wyrd.name/en:bearlibterminal");
 		terminal_refresh();
 
-		do
-		{
-			int key = terminal_read();
+		int key = terminal_read();
 
-			if (key == TK_ESCAPE || key == TK_CLOSE)
+		if (key == TK_ESCAPE || key == TK_CLOSE)
+		{
+			break;
+		}
+		else if ((key >= TK_1 && key <= TK_9) || (key >= TK_A && key <= TK_Z))
+		{
+			int index = key >= TK_1? (key-TK_1): 9+(key-TK_A);
+			if (index >= 0 && index < entries.size() && entries[index].func)
 			{
-				proceed = false;
-			}
-			else if ((key >= TK_1 && key <= TK_9) || (key >= TK_A && key <= TK_Z))
-			{
-				int index = key >= TK_1? (key-TK_1): 9+(key-TK_A);
-				if (index >= 0 && index < entries.size() && entries[index].func)
-				{
-					entries[index].func();
-					reset();
-				}
+				entries[index].func();
+				reset();
 			}
 		}
-		while (proceed && terminal_has_input());
 	}
 	terminal_close();
 	return 0;

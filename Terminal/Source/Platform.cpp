@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2014 Cfyz
+* Copyright (C) 2014-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -24,6 +24,7 @@
 #include "Encoding.hpp"
 #include "Utility.hpp"
 #include "Log.hpp"
+#include "Terminal.hpp"
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -35,7 +36,7 @@
 #define _WIN32_WINNT 0x502
 #endif
 #define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+#include <windows.h>
 #else
 #include <dlfcn.h>
 #include <dirent.h>
@@ -45,6 +46,10 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#if defined(__APPLE__)
+#include "CocoaWindow.h"
+#endif
 
 #if defined(GetCurrentDirectory)
 #undef GetCurrentDirectory
@@ -199,20 +204,44 @@ namespace BearLibTerminal
 		return Module();
 	}
 
-	static void FixPathSeparators(std::wstring& name)
+	std::unordered_map<std::wstring, std::weak_ptr<Module>> Module::m_cache;
+
+	std::shared_ptr<Module> Module::Load(std::wstring name)
+	{
+		try
+		{
+			auto it = m_cache.find(name);
+			if (it != m_cache.end())
+			{
+				if (auto ret = it->second.lock())
+					return ret;
+			}
+
+			auto ret = std::make_shared<Module>(name);
+			m_cache[name] = ret;
+			return ret;
+		}
+		catch (...)
+		{
+			return std::shared_ptr<Module>{};
+		}
+	}
+
+	std::wstring FixPathSeparators(std::wstring name)
 	{
 #if defined(_WIN32)
 		for (auto& c: name)
 			if (c == L'/')
 				c = L'\\';
 #endif
+		return std::move(name);
 	}
 
 	// FIXME: polymorphic stream use is not guaranteed to be safe!
 	// FIXME: MinGW and UTF-8 file name encoding.
 	std::unique_ptr<std::istream> OpenFileReading(std::wstring name)
 	{
-		FixPathSeparators(name);
+		name = FixPathSeparators(std::move(name));
 		std::unique_ptr<std::istream> result;
 #if defined(_MSC_VER)
 		result.reset(new std::ifstream(name, std::ios_base::in|std::ios_base::binary));
@@ -229,7 +258,7 @@ namespace BearLibTerminal
 
 	std::unique_ptr<std::ostream> OpenFileWriting(std::wstring name)
 	{
-		FixPathSeparators(name);
+		name = FixPathSeparators(std::move(name));
 		std::unique_ptr<std::ostream> result;
 #if defined(_MSC_VER)
 		result.reset(new std::ofstream
@@ -244,6 +273,28 @@ namespace BearLibTerminal
 		}
 
 		return result;
+	}
+
+	std::vector<uint8_t> ReadFile(std::wstring name)
+	{
+		name = FixPathSeparators(std::move(name));
+		//std::unique_ptr<std::istream> result;
+#if defined(_MSC_VER)
+		std::ifstream file{name, std::ios_base::in|std::ios_base::binary};
+#else
+		std::ifstream file{UTF8Encoding().Convert(name), std::ios_base::in|std::ios_base::binary};
+#endif
+		if (file.fail())
+			throw std::runtime_error("file \"" + UTF8Encoding().Convert(name) + "\" cannot be opened");
+
+		file.seekg(0, std::ios_base::end);
+		size_t size = file.tellg();
+		file.seekg(0, std::ios_base::beg);
+		std::vector<uint8_t> result(size);
+		file.read((char*)&result[0], size);
+
+		LOG(Debug, "Loaded resource from '" << name << "' (" << size << " bytes)");
+		return std::move(result);
 	}
 
 	bool FileExists(std::wstring name)
@@ -474,6 +525,35 @@ namespace BearLibTerminal
 		WriteFile(stderr_handle, what, strlen(what), &written, NULL);
 #else
 		std::cerr << what;
+#endif
+	}
+
+	std::wstring GetClipboardContents()
+	{
+#if defined(_WIN32)
+		if (!OpenClipboard(NULL))
+		{
+			LOG(Error, "Failed to open clipboard");
+			return L"";
+		}
+
+		std::wstring text;
+		if (HGLOBAL handle = GetClipboardData(CF_UNICODETEXT))
+		{
+			if (auto ptr = (const wchar_t*)GlobalLock(handle))
+			{
+				text = ptr;
+				GlobalUnlock(handle);
+			}
+		}
+
+		CloseClipboard();
+		return text;
+#elif defined(__APPLE__)
+		return GetCocoaPasteboardString();
+#else
+		// XXX: Another refactoring is imminent.
+		return g_instance? g_instance->GetClipboard(): std::wstring{};
 #endif
 	}
 }

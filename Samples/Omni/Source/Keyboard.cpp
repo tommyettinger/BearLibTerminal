@@ -47,7 +47,7 @@ static void FillRectangle(int x, int y, int w, int h, color_t color)
 void TestKeyboard()
 {
 	terminal_set("window.title='Omni: basic keyboard input'");
-	terminal_set("input.events=keypress+keyrelease");
+	terminal_set("input.filter={keyboard+}");
 	terminal_composition(TK_ON);
 
 	//
@@ -162,7 +162,9 @@ void TestKeyboard()
 		{ TK_SHIFT, 28, 10, 6, 1, " SHIFT" },
 		// Fifth row
 		{ TK_CONTROL, 1, 12, 4, 1, "CTRL" },
+		{ TK_ALT, 9, 12, 3, 1, "ALT" },
 		{ TK_SPACE, 13, 12, 5, 1, "SPACE" },
+		{ TK_ALT, 19, 12, 3, 1, "ALT"},
 		{ TK_CONTROL, 30, 12, 4, 1, "CTRL" },
 		// Navigation
 		{ TK_INSERT, 36, 4, 4, 1, "INS" },
@@ -199,8 +201,6 @@ void TestKeyboard()
 	{
 		{ 0, 1, 8, 5, 1, "CAPS " },
 		{ 0, 6, 12, 2, 1, "LW" },
-		{ 0, 9, 12, 3, 1, "ALT" },
-		{ 0, 19, 12, 3, 1, "ALT" },
 		{ 0, 23, 12, 2, 1, "RW" },
 		{ 0, 26, 12, 3, 1, "CTX" },
 		{ 0, 48, 1, 5, 1, "PRSCR" },
@@ -218,8 +218,7 @@ void TestKeyboard()
 	const color_t grid_color = 0xFF606060;
 	const color_t note_text_color = 0xFF008000;
 
-	bool proceed = true;
-	while (proceed)
+	while (true)
 	{
 		terminal_clear();
 
@@ -289,17 +288,14 @@ void TestKeyboard()
 
 		terminal_refresh();
 
-		do
+		int key = terminal_read();
+
+		if (key == TK_CLOSE || (key == TK_ESCAPE && terminal_state(TK_SHIFT)))
 		{
-			int key = terminal_read();
-			if (key == TK_CLOSE || (key == TK_ESCAPE && terminal_state(TK_SHIFT)))
-			{
-				proceed = false; break;
-			}
+			break;
 		}
-		while (terminal_has_input());
 	}
 
 	terminal_composition(TK_OFF);
-	terminal_set("input.events=keypress");
+	terminal_setf("input.filter={keyboard}");
 }

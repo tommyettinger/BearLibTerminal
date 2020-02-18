@@ -1,6 +1,6 @@
 ﻿/*
 * BearLibTerminal C# wrapper
-* Copyright (C) 2013-2014 Cfyz
+* Copyright (C) 2013-2017 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -18,8 +18,6 @@
 * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-*
-* Release date: 2014-11-10
 */
 
 using System;
@@ -32,9 +30,9 @@ using System.Runtime.InteropServices;
 namespace BearLib
 {
     public static class Terminal
-    {        
+    {
         public const int
-        
+
         // Keyboard scancodes 
         TK_A                = 0x04,
         TK_B                = 0x05,
@@ -130,7 +128,8 @@ namespace BearLib
         TK_KP_PERIOD        = 0x63,
         TK_SHIFT            = 0x70,
         TK_CONTROL          = 0x71,
-    
+        TK_ALT              = 0x72,
+
         // Mouse events/states
         TK_MOUSE_LEFT       = 0x80, // Buttons
         TK_MOUSE_RIGHT      = 0x81,
@@ -145,10 +144,10 @@ namespace BearLib
         TK_MOUSE_PIXEL_Y    = 0x8A,
         TK_MOUSE_WHEEL      = 0x8B, // Scroll direction and amount
         TK_MOUSE_CLICKS     = 0x8C, // Number of consecutive clicks
-    
+
         //If key was released instead of pressed, it's code will be OR'ed withTK_KEY_RELEASED
         TK_KEY_RELEASED     = 0x100,
-    
+
         // Virtual key-codes for internal terminal states/variables.
         // These can be accessed via terminal_state function.
         TK_WIDTH            = 0xC0, // Terminal width in cells
@@ -163,19 +162,49 @@ namespace BearLib
         TK_WCHAR            = 0xC9, // Unicode codepoint of last produced character
         TK_EVENT            = 0xCA, // Last dequeued event
         TK_FULLSCREEN       = 0xCB, // Fullscreen state
-    
+
         // Other events
         TK_CLOSE            = 0xE0,
         TK_RESIZED          = 0xE1,
-    
-        // Generic mode enum.
-        // Right now it is used for composition option only.
-        TK_OFF              =    0,
-        TK_ON               =    1,
-    
+
         // Input result codes for terminal_read function.
         TK_INPUT_NONE       =    0,
         TK_INPUT_CANCELLED  =   -1;
+        
+        private static string Format(string text, object[] args)
+        {
+        	if (args != null && args.Length > 0)
+        		return string.Format(text, args);
+        	else
+        		return text;
+        }
+        
+        private static int LibraryAlignmentFromContentAlignment(ContentAlignment alignment)
+        {
+            switch (alignment)
+            {
+                case ContentAlignment.TopLeft:
+                    return 5;
+                case ContentAlignment.TopCenter:
+                    return 7;
+                case ContentAlignment.TopRight:
+                    return 6;
+                case ContentAlignment.MiddleLeft:
+                    return 13;
+                case ContentAlignment.MiddleCenter:
+                    return 15;
+                case ContentAlignment.MiddleRight:
+                    return 14;
+                case ContentAlignment.BottomLeft:
+                    return 9;
+                case ContentAlignment.BottomCenter:
+                    return 11;
+                case ContentAlignment.BottomRight:
+                    return 10;
+                default:
+                    return 5;
+            }
+        }
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_open", CallingConvention=CallingConvention.Cdecl)]
         public static extern bool Open();
@@ -191,27 +220,37 @@ namespace BearLib
 
         public static bool Set(string options, params object[] args)
         {
-        	Dictionary<Bitmap, BitmapData> bitmaps = new Dictionary<Bitmap, BitmapData>();
-        	for (int i=0; i<args.Length; i++)
-        	{
-        		if (args[i] is Bitmap)
-        		{
-        			Bitmap bitmap = args[i] as Bitmap;
-        			BitmapData data = bitmap.LockBits
-					(
-						new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-						ImageLockMode.ReadOnly,
-						PixelFormat.Format32bppArgb
-					);
-					bitmaps[bitmap] = data;
-					args[i] = string.Format("0x{0:X}", (System.UInt64)data.Scan0.ToInt64());
-        		}
-        	}
-        	bool result = Set(string.Format(options, args));
-        	foreach(KeyValuePair<Bitmap, BitmapData> i in bitmaps)
-        	{
-        		i.Key.UnlockBits(i.Value);
-        	}
+            Dictionary<Bitmap, BitmapData> bitmaps = new Dictionary<Bitmap, BitmapData>();
+            for (int i=0; i<args.Length; i++)
+            {
+                if (args[i] is Bitmap)
+                {
+                    Bitmap bitmap = args[i] as Bitmap;
+                    BitmapData data = bitmap.LockBits
+                    (
+                        new Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                        ImageLockMode.ReadOnly,
+                        PixelFormat.Format32bppArgb
+                    );
+                    bitmaps[bitmap] = data;
+                    args[i] = string.Format("0x{0:X}", (System.UInt64)data.Scan0.ToInt64());
+                }
+                else if (args[i] is Size)
+                {
+                    Size size = (Size)args[i];
+                    args[i] = string.Format("{0}x{1}", size.Width, size.Height);
+                }
+                else if (args[i] is bool)
+                {
+                    bool value = (bool)args[i];
+                    args[i] = value? "true": "false";
+                }
+            }
+            bool result = Set(string.Format(options, args));
+            foreach(KeyValuePair<Bitmap, BitmapData> i in bitmaps)
+            {
+                i.Key.UnlockBits(i.Value);
+            }
             return result;
         }
 
@@ -220,9 +259,19 @@ namespace BearLib
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_clear_area", CallingConvention = CallingConvention.Cdecl)]
         public static extern void ClearArea(int x, int y, int w, int h);
-        
+
+        public static void ClearArea(Rectangle area)
+        {
+            ClearArea(area.X, area.Y, area.Width, area.Height);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_crop", CallingConvention = CallingConvention.Cdecl)]
         public static extern void Crop(int x, int y, int w, int h);
+
+        public static void Crop(Rectangle area)
+        {
+            Crop(area.X, area.Y, area.Width, area.Height);
+        }
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_color", CallingConvention = CallingConvention.Cdecl)]
         private static extern void ColorImpl(int argb);
@@ -231,10 +280,10 @@ namespace BearLib
         {
             ColorImpl(color.ToArgb());
         }
-        
+
         public static void Color(string name)
         {
-        	ColorImpl(ColorFromNameImpl(name));
+            ColorImpl(ColorFromNameImpl(name));
         }
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_bkcolor", CallingConvention=CallingConvention.Cdecl)]
@@ -244,102 +293,203 @@ namespace BearLib
         {
             BkColorImpl(color.ToArgb());
         }
-        
+
         public static void BkColor(string name)
         {
         	BkColorImpl(ColorFromNameImpl(name));
         }
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_composition", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void Composition(int mode);
-        
+        private static extern void CompositionImpl(int mode);
+
+        public static void Composition(bool enabled)
+        {
+        	CompositionImpl(enabled? 1: 0);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_layer", CallingConvention = CallingConvention.Cdecl)]
-        public static extern void Layer(int mode);
+        public static extern void Layer(int index);
+
+        [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_font16", CallingConvention = CallingConvention.Cdecl)]
+        public static extern void Font(string name);
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_put", CallingConvention = CallingConvention.Cdecl)]
         public static extern void Put(int x, int y, int code);
+
+        public static void Put(Point location, int code)
+        {
+            Put(location.X, location.Y, code);
+        }
 
         public static void Put(int x, int y, char code)
         {
             Put(x, y, (int)code);
         }
-        
+
+        public static void Put(Point location, char code)
+        {
+            Put(location.X, location.Y, (int)code);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_put_ext", CallingConvention = CallingConvention.Cdecl)]
         private static extern void PutExtImpl(int x, int y, int dx, int dy, int code, [MarshalAs(UnmanagedType.LPArray)]System.Int32[] corners);
-        
+
         public static void PutExt(int x, int y, int dx, int dy, int code)
         {
-        	PutExtImpl(x, y, dx, dy, code, null);
+            PutExtImpl(x, y, dx, dy, code, null);
         }
-        
+
+        public static void PutExt(Point location, Point offset, int code)
+        {
+            PutExtImpl(location.X, location.Y, offset.X, offset.Y, code, null);
+        }
+
         public static void PutExt(int x, int y, int dx, int dy, char code)
         {
-        	PutExt(x, y, dx, dy, (int)code);
+            PutExtImpl(x, y, dx, dy, (int)code, null);
         }
-        
+
+        public static void PutExt(Point location, Point offset, char code)
+        {
+            PutExtImpl(location.X, location.Y, offset.X, offset.Y, (int)code, null);
+        }
+
         public static void PutExt(int x, int y, int dx, int dy, int code, Color[] corners)
         {
-        	System.Int32[] values = new System.Int32[4];
-        	for (int i=0; i<4; i++) values[i] = corners[i].ToArgb();
-        	PutExtImpl(x, y, dx, dy, code, values);
+            System.Int32[] values = new System.Int32[4];
+            for (int i=0; i<4; i++) values[i] = corners[i].ToArgb();
+            PutExtImpl(x, y, dx, dy, code, values);
         }
-        
+
+        public static void PutExt(Point location, Point offset, int code, Color[] corners)
+        {
+            PutExt(location.X, location.Y, offset.X, offset.Y, code, corners);
+        }
+
         public static void PutExt(int x, int y, int dx, int dy, char code, Color[] corners)
         {
-        	PutExt(x, y, dx, dy, (int)code, corners);
+            PutExt(x, y, dx, dy, (int)code, corners);
         }
-        
+
+        public static void PutExt(Point location, Point offset, char code, Color[] corners)
+        {
+            PutExt(location.X, location.Y, offset.X, offset.Y, (int)code, corners);
+        }
+
         public static int Pick(int x, int y)
         {
-        	return Pick(x, y, 0);
+            return Pick(x, y, 0);
         }
-        
+
+        public static int Pick(Point location)
+        {
+            return Pick(location.X, location.Y, 0);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_pick", CallingConvention = CallingConvention.Cdecl)]
         public static extern int Pick(int x, int y, int index);
-        
+
+        public static int Pick(Point location, int index)
+        {
+            return Pick(location.X, location.Y, index);
+        }
+
         public static Color PickColor(int x, int y)
         {
-        	return PickColor(x, y, 0);
+            return PickColor(x, y, 0);
         }
-        
+
+        public static Color PickColor(Point location)
+        {
+            return PickColor(location.X, location.Y, 0);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_pick_color", CallingConvention = CallingConvention.Cdecl)]
         private static extern int PickColorImpl(int x, int y, int index);
-        
+
         public static Color PickColor(int x, int y, int index)
         {
-        	return System.Drawing.Color.FromArgb(PickColorImpl(x, y, index));
+            return System.Drawing.Color.FromArgb(PickColorImpl(x, y, index));
         }
-        
+
+        public static Color PickColor(Point location, int index)
+        {
+            return PickColor(location.X, location.Y, index);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_pick_bkcolor", CallingConvention = CallingConvention.Cdecl)]
         private static extern int PickBkColorImpl(int x, int y);
-        
+
         public static Color PickBkColor(int x, int y)
         {
-        	return System.Drawing.Color.FromArgb(PickBkColorImpl(x, y));
+            return System.Drawing.Color.FromArgb(PickBkColorImpl(x, y));
         }
 
-        [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_print16", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int Print(int x, int y, string text);
-
-        public static int Print(int x, int y, string text, params object[] args)
+        public static Color PickBkColor(Point location)
         {
-            return Print(x, y, string.Format(text, args));
+            return PickBkColor(location.X, location.Y);
+        }
+
+        [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_print_ext16", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void PrintImpl(int x, int y, int w, int h, int align, string text, out int out_w, out int out_h);
+        
+        public static Size Print(Rectangle layout, ContentAlignment alignment, string text, params object[] args)
+        {
+        	int width, height;
+        	PrintImpl(layout.X, layout.Y, layout.Width, layout.Height, LibraryAlignmentFromContentAlignment(alignment), Format(text, args), out width, out height);
+        	return new Size(width, height);
         }
         
-        [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_measure16", CallingConvention = CallingConvention.Cdecl)]
-        public static extern int Measure(string text);
-
-        public static int Measure(string text, params object[] args)
+        public static Size Print(Rectangle layout, string text, params object[] args)
         {
-            return Measure(string.Format(text, args));
+        	return Print(layout, ContentAlignment.TopLeft, text, args);
+        }
+        
+        public static Size Print(Point location, ContentAlignment alignment, string text, params object[] args)
+        {
+        	return Print(location.X, location.Y, alignment, text, args);
+        }
+        
+        public static Size Print(Point location, string text, params object[] args)
+        {
+        	return Print(location.X, location.Y, text, args);
+        }
+        
+        public static Size Print(int x, int y, ContentAlignment alignment, string text, params object[] args)
+        {
+        	int width, height;
+        	PrintImpl(x, y, 0, 0, LibraryAlignmentFromContentAlignment(alignment), Format(text, args), out width, out height);
+        	return new Size(width, height);
+        }
+        
+        public static Size Print(int x, int y, string text, params object[] args)
+        {
+        	int width, height;
+        	PrintImpl(x, y, 0, 0, 0, Format(text, args), out width, out height);
+        	return new Size(width, height);
+        }  
+
+        [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_measure_ext16", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void MeasureImpl(int width, int height, string text, out int out_w, out int out_h);
+        
+        public static Size Measure(Size bbox, string text, params object[] args)
+        {
+        	int width, height;
+        	MeasureImpl(bbox.Width, bbox.Height, Format(text, args), out width, out height);
+        	return new Size(width, height);
+        }
+        
+        public static Size Measure(string text, params object[] args)
+        {
+        	return Measure(new Size(), text, args);
         }
 
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_has_input", CallingConvention = CallingConvention.Cdecl)]
         public static extern bool HasInput();
-        
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_state", CallingConvention = CallingConvention.Cdecl)]
         public static extern int State(int code);
-        
+
         public static bool Check(int code)
         {
             return State(code) > 0;
@@ -351,6 +501,11 @@ namespace BearLib
         [DllImport("BearLibTerminal.dll", CharSet = CharSet.Unicode, EntryPoint = "terminal_read_str16", CallingConvention = CallingConvention.Cdecl)]
         public static extern int ReadStr(int x, int y, StringBuilder text, int max);
 
+        public static int ReadStr(Point location, StringBuilder text, int max)
+        {
+            return ReadStr(location.X, location.Y, text, max);
+        }
+
         public static int ReadStr(int x, int y, ref string text, int max)
         {
             StringBuilder buffer = new StringBuilder(text, max);
@@ -358,10 +513,15 @@ namespace BearLib
             text = buffer.ToString();
             return result;
         }
-        
+
+        public static int ReadStr(Point location, ref string text, int max)
+        {
+            return ReadStr(location.X, location.Y, ref text, max);
+        }
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_peek", CallingConvention = CallingConvention.Cdecl)]
         public static extern int Peek();
-        
+
         [DllImport("BearLibTerminal.dll", EntryPoint = "terminal_delay", CallingConvention = CallingConvention.Cdecl)]
         public static extern void Delay(int period);
 
@@ -371,6 +531,17 @@ namespace BearLib
         public static string Get(string name, string default_value = "")
         {
             return Marshal.PtrToStringUni(GetImpl(name, default_value));
+        }
+
+        private static object ParseSize(string s)
+        {
+            string[] parts = s.Split('x');
+            return new Size(int.Parse(parts[0]), int.Parse(parts[1]));
+        }
+
+        private static object ParseBool(string s)
+        {
+            return s == "true";
         }
 
         public static T Get<T>(string name, T default_value = default(T))
@@ -385,7 +556,16 @@ namespace BearLib
                 try
                 {
                     Type type = typeof(T);
-                    if (type.IsPrimitive)
+                    
+                    if (type == typeof(Size))
+                    {
+                        return (T)ParseSize(result_str);
+                    }
+                    else if (type == typeof(bool))
+                    {
+                        return (T)ParseBool(result_str);
+                    }
+                    else if (type.IsPrimitive)
                     {
                         return (T)Convert.ChangeType(result_str, typeof(T));
                     }

@@ -279,14 +279,52 @@ namespace BearLibTerminal
 
 	bool Bitmap::HasAlpha() const
 	{
-		for (const Color& pixel: m_data) if (pixel.a < 0xFF) return true;
+		for (const Color& pixel: m_data)
+		{
+			if (pixel.a < 0xFF)
+				return true;
+		}
 
 		return false;
 	}
 
 	void Bitmap::MakeTransparent(Color color)
 	{
-		for (Color& pixel: m_data) if (pixel == color) pixel.a = 0;
+		// If black regardless of alpha
+		if (color.r == 0 && color.g == 0 && color.b == 0)
+		{
+			std::vector<int> luma(m_data.size());
+			bool grayscale = true;
+
+			for (size_t i = 0; i < m_data.size(); i++)
+			{
+				int min = std::min(m_data[i].r, std::min(m_data[i].g, m_data[i].b));
+				int max = std::max(m_data[i].r, std::max(m_data[i].g, m_data[i].b));
+				if (max - min > 1)
+				{
+					grayscale = false;
+					break;
+				}
+				luma[i] = max;
+			}
+
+			if (grayscale)
+			{
+				for (size_t i = 0; i < m_data.size(); i++)
+				{
+					m_data[i].a = luma[i];
+					m_data[i].r = m_data[i].g = m_data[i].b = 255;
+				}
+
+				return;
+			}
+		}
+
+		for (Color& pixel: m_data)
+		{
+			if (pixel == color)
+				pixel.a = 0;
+		}
 	}
 
 	Bitmap ResizeNearest(Bitmap& original, Size size)
@@ -312,6 +350,7 @@ namespace BearLibTerminal
 
 	Bitmap ResizeBilinear(Bitmap& original, Size size)
 	{
+		Size original_size = original.GetSize();
 		Bitmap result(size, Color());
 
 		auto filter = [&](int x, int y, float ox, float oy)
@@ -328,9 +367,9 @@ namespace BearLibTerminal
 			float w4 = dx1*dy1;
 
 			Color q11 = original(x1+0, y1+0);
-			Color q12 = original(x1+0, y1+1);
-			Color q21 = original(x1+1, y1+0);
-			Color q22 = original(x1+1, y1+1);
+			Color q12 = (y1+1 < original_size.height)? original(x1+0, y1+1): q11;
+			Color q21 = (x1+1 < original_size.width)? original(x1+1, y1+0): q11;
+			Color q22 = (x1+1 < original_size.width && y1+1 < original_size.height)? original(x1+1, y1+1): q11;
 
 			int r = q11.r*w1 + q21.r*w2 + q12.r*w3 + q22.r*w4;
 			int g = q11.g*w1 + q21.g*w2 + q12.g*w3 + q22.g*w4;
@@ -340,7 +379,6 @@ namespace BearLibTerminal
 			return Color(a, r, g, b);
 		};
 
-		Size original_size = original.GetSize();
 		float hfactor = size.width / (float)original_size.width;
 		float vfactor = size.height / (float)original_size.height;
 
@@ -515,5 +553,46 @@ namespace BearLibTerminal
 		{
 			throw std::runtime_error("Bitmap::Resize: internal logic error");
 		}
+	}
+
+	Point Bitmap::CenterOfMass() const
+	{
+		std::vector<int> cfs(m_size.width, 0.0f);
+		std::vector<int> rfs(m_size.height, 0.0f);
+		for (int y = 0; y < m_size.height; y++)
+		{
+			for (int x = 0; x < m_size.width; x++)
+			{
+				float a = m_data[y * m_size.width + x].a;
+				if (a > cfs[x])
+					cfs[x] = a;
+				if (a > rfs[y])
+					rfs[y] = a;
+			}
+		}
+
+		int lwf = 0, rwf = 0;
+		for (size_t i = 0; i < cfs.size() && cfs[i] < 224; i++)
+		{
+			lwf += 255 - cfs[i];
+		}
+		for (int i = cfs.size()-1; i >= 0 && cfs[i] < 224; i--)
+		{
+			rwf += 255 - cfs[i];
+		}
+		float wf = m_size.width + (lwf - rwf) / 255.0f;
+
+		int thf = 0, bhf = 0;
+		for (size_t i = 0; i < rfs.size() && rfs[i] < 224; i++)
+		{
+			thf += 255 - rfs[i];
+		}
+		for (int i = rfs.size()-1; i >= 0 && rfs[i] < 224; i--)
+		{
+			bhf += 255 - rfs[i];
+		}
+		float hf = m_size.height + (thf - bhf) / 255.0f;
+
+		return Point(std::round(wf/2.0f), std::round(hf/2.0f));
 	}
 }

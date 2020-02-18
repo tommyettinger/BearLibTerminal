@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2017 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -30,11 +30,9 @@
 #include "Encoding.hpp"
 #include "OptionGroup.hpp"
 #include "Log.hpp"
-#include <mutex>
 #include <deque>
-#include <atomic>
-#include <condition_variable>
 #include <array>
+#include <thread>
 
 namespace BearLibTerminal
 {
@@ -52,12 +50,13 @@ namespace BearLibTerminal
 		void SetForeColor(Color color);
 		void SetBackColor(Color color);
 		void SetComposition(int mode);
+		void SetFont(std::wstring name);
 		void Put(int x, int y, int code);
 		void PutExtended(int x, int y, int dx, int dy, int code, Color* corners);
 		int Pick(int x, int y, int index);
 		Color PickForeColor(int x, int y, int index);
 		Color PickBackColor(int x, int y);
-		int Print(int x, int y, std::wstring str, bool raw, bool measure_only);
+		Size Print(int x, int y, int w, int h, int align, std::wstring str, bool raw, bool measure_only);
 		int HasInput();
 		int GetState(int code);
 		int Read();
@@ -65,10 +64,9 @@ namespace BearLibTerminal
 		int Peek();
 		void Delay(int period);
 		const Encoding8& GetEncoding() const;
+		std::wstring GetClipboard();
 	private:
 		void SetOptionsInternal(const std::wstring& params);
-		void ApplyTilesets(std::map<uint16_t, std::unique_ptr<Tileset>>& tilesets);
-		void UpdateDynamicTileset(Size size);
 		void ValidateWindowOptions(OptionGroup& group, Options& options);
 		void ValidateInputOptions(OptionGroup& group, Options& options);
 		void ValidateOutputOptions(OptionGroup& group, Options& options);
@@ -76,30 +74,25 @@ namespace BearLibTerminal
 		void ValidateLoggingOptions(OptionGroup& group, Options& options);
 		bool ParseInputFilter(const std::wstring& s, std::set<int>& out);
 		void ConfigureViewport();
-		void PutInternal(int x, int y, int dx, int dy, wchar_t code, Color* colors);
-		void PrepareFreshCharacters();
+		void PutInternal(int x, int y, int dx, int dy, char32_t code, Color* colors);
 		void ConsumeEvent(Event& event);
-		bool HasInputInternalUnlocked();
 		Event ReadEvent(int timeout);
-		int ReadStringInternalBlocking(int x, int y, wchar_t* buffer, int max);
-		int ReadStringInternalNonblocking(wchar_t* buffer, int max);
-		void HandleDestroy();
-		int Redraw(bool async);
+		void Render();
+		int Redraw();
 		int OnWindowEvent(Event event);
 		void PushEvent(Event event);
+		bool IsEventFiltered(int code);
+		bool HasFilteredInput();
 	private:
 		enum state_t {kHidden, kVisible, kClosed} m_state;
-		mutable std::mutex m_lock;
-		mutable std::mutex m_input_lock;
-		std::unique_ptr<Log> m_log; // FIXME: dependency hack
+		std::thread::id m_main_thread_id;
 		std::unique_ptr<Window> m_window;
 		std::deque<Event> m_input_queue;
-		std::condition_variable m_input_condvar;
-		std::array<std::int32_t, 0x100> m_vars;
+		std::array<int32_t, 256> m_vars;
 		std::unique_ptr<Encoding8> m_encoding;
 		World m_world;
 		Options m_options;
-		std::list<uint16_t> m_fresh_codes;
+		std::list<char32_t> m_fresh_codes;
 		std::map<std::wstring, std::unique_ptr<Encoding8>> m_codepage_cache;
 		bool m_show_grid;
 		bool m_viewport_modified;
@@ -108,7 +101,10 @@ namespace BearLibTerminal
 		int m_scale_step;
 		Rectangle m_stage_area;
 		SizeF m_stage_area_factor;
+		bool m_alt_pressed; // For alt-functions interception.
 	};
+
+	extern std::unique_ptr<Terminal> g_instance;
 }
 
 #endif // BEARLIBTERMINAL_TERMINAL_HPP

@@ -5,6 +5,7 @@
 void TestPick()
 {
 	terminal_set("window.title='Omni: examining cell contents'");
+	terminal_set("input.filter={keyboard, mouse}"); // Enable mouse events.
 
 	terminal_clear();
 	terminal_color("white");
@@ -39,7 +40,7 @@ void TestPick()
 
 	terminal_color("white");
 
-	for (bool proceed=true; proceed;)
+	while (true)
 	{
 		int x = terminal_state(TK_MOUSE_X);
 		int y = terminal_state(TK_MOUSE_Y);
@@ -55,7 +56,7 @@ void TestPick()
 				if (code == 0) break;
 
 				color_t color = terminal_pick_color(x, y, n);
-				terminal_printf(2+n*2, 23, "[color=%d]%lc", color, (wchar_t)code);
+				terminal_printf(2+n*2, 23, L"[color=%d]%lc", color, (wchar_t)code);
 
 				n += 1;
 			}
@@ -69,14 +70,11 @@ void TestPick()
 
 		terminal_refresh();
 
-		do
+		int key = terminal_read();
+
+		if (key == TK_CLOSE || key == TK_ESCAPE)
 		{
-			int key = terminal_read();
-			if (key == TK_CLOSE || key == TK_ESCAPE)
-			{
-				proceed = false;
-			}
+			break;
 		}
-		while (proceed && terminal_has_input());
 	}
 }

@@ -12,9 +12,9 @@ void TestLayers()
 	terminal_set("window.title='Omni: layers'");
 
 	color_t pixel = color_from_name("dark gray");
-	terminal_setf("U+E000: %#p, size=1x1, resize=48x48, resize-filter=nearest", &pixel);
+	terminal_setf("U+E000: %#p, raw-size=1x1, resize=48x48, resize-filter=nearest", &pixel);
 
-	for (bool proceed=true; proceed;)
+	while (true)
 	{
 		terminal_clear();
 		terminal_color("white");
@@ -31,15 +31,12 @@ void TestLayers()
 
 		terminal_refresh();
 
-		do
+		int key = terminal_read();
+
+		if (key == TK_CLOSE || key == TK_ESCAPE)
 		{
-			int key = terminal_read();
-			if (key == TK_CLOSE || key == TK_ESCAPE)
-			{
-				proceed = false;
-			}
+			break;
 		}
-		while (proceed && terminal_has_input());
 	}
 
 	terminal_set("U+E000: none");

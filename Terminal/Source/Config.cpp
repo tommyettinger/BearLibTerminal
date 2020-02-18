@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2015 Cfyz
+* Copyright (C) 2015-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -31,20 +31,8 @@
 
 namespace BearLibTerminal
 {
-	Config::Config():
-		m_initialized(false)
-	{
-		Init();
-	}
-
-	void Config::Init()
-	{
-		m_filename = GuessConfigFilename();
-		LOG(Info, "Using configuration file '" << m_filename << "'");
-
-		Load();
-		m_initialized = true;
-	}
+	Config::Config()
+	{ }
 
 	std::wstring Config::GuessConfigFilename()
 	{
@@ -99,8 +87,14 @@ namespace BearLibTerminal
 		return best_filename;
 	}
 
-	void Config::Load()
+	void Config::Reload()
 	{
+		// Clear previous state.
+		m_sections.clear();
+		m_filename.clear();
+
+		m_filename = GuessConfigFilename();
+		LOG(Info, "Using configuration file '" << m_filename << "'");
 		if (!FileExists(m_filename))
 		{
 			// No use trying to open nonexistent file.
@@ -187,22 +181,14 @@ namespace BearLibTerminal
 				}
 
 				Section& section = m_sections[current_section];
-
-				std::wstring name = trim(line.substr(0, pos));
-				line[pos] = L':';
-
 				for (const auto& group: ParseOptions2(line, true))
 				{
 					for (auto& i: group.attributes)
 					{
-						std::wstring key = i.first;
+						std::wstring key = (i.first == L"_")? group.name: (group.name + L"." + i.first);
 						std::wstring value = i.second;
-
-						key = key.empty()? name: (name + L"." + key);
-
 						Property& property = section.m_properties[key];
 						property.m_value = value;
-
 						LOG(Trace, L"'" << key << L"' = '" << value << L"'");
 					}
 				}
@@ -212,16 +198,24 @@ namespace BearLibTerminal
 
 	bool Config::TryGet(std::wstring name, std::wstring& out)
 	{
-		std::lock_guard<std::mutex> guard(m_lock);
-
-		if (!m_initialized)
-			Init();
-
 		if (name.empty())
+		{
 			return false;
-
-		if (!starts_with<wchar_t>(name, L"sys.") && !starts_with<wchar_t>(name, L"ini."))
+		}
+		else if (name == L"version" || name == L"terminal.version")
+		{
+			out = UTF8Encoding().Convert(TERMINAL_VERSION);
+			return true;
+		}
+		else if (name == L"clipboard")
+		{
+			out = GetClipboardContents();
+			return true;
+		}
+		else if (!starts_with<wchar_t>(name, L"sys.") && !starts_with<wchar_t>(name, L"ini."))
+		{
 			name = L"sys." + name;
+		}
 
 		std::wstring section_name, property_name;
 
@@ -266,7 +260,6 @@ namespace BearLibTerminal
 	std::map<std::wstring, std::wstring> Config::List(const std::wstring& section)
 	{
 		std::map<std::wstring, std::wstring> result;
-		std::lock_guard<std::mutex> guard(m_lock);
 		auto i = m_sections.find(section);
 		if (i != m_sections.end())
 		{
@@ -278,11 +271,6 @@ namespace BearLibTerminal
 
 	void Config::Set(std::wstring name, std::wstring value)
 	{
-		std::lock_guard<std::mutex> gurad(m_lock);
-
-		if (!m_initialized)
-			Init();
-
 		if (name.empty())
 			return;
 
@@ -336,7 +324,7 @@ namespace BearLibTerminal
 
 		// Prepare property value for merging
 		std::map<std::string, std::string> pieces;
-		std::string piece_name;
+		std::string piece_name = "_";
 		{
 			size_t period_pos = property_name.find(".");
 			if (period_pos != std::string::npos)
@@ -460,10 +448,6 @@ namespace BearLibTerminal
 					lines.pop_back();
 				}
 
-				// Overwriting name separator will make the line suitable for
-				// universal parsing by ParseOptions function.
-				line[pos] = ':';
-
 				for (const auto& group: ParseOptions2(UTF8Encoding().Convert(line), true))
 				{
 					for (auto& i: group.attributes)
@@ -510,7 +494,7 @@ namespace BearLibTerminal
 		{
 			std::ostringstream ss;
 			ss << property_name;
-			if (pieces.size() == 1 && pieces.begin()->first.empty())
+			if (pieces.size() == 1 && pieces.begin()->first == "_")
 			{
 				// One entry and its subname is empty --> "foo=bar"
 				ss << "=";
@@ -522,7 +506,7 @@ namespace BearLibTerminal
 				for (auto i = pieces.begin(); i != pieces.end(); i++)
 				{
 					ss << (i == pieces.begin()? ": ": ", ");
-					if (i->first.empty())
+					if (i->first == "_")
 					{
 						append_escaped(ss, i->second);
 					}
@@ -590,14 +574,6 @@ namespace BearLibTerminal
 			LOG(Error, L"Cannot open configuration file '" << m_filename << "' for writing");
 			return;
 		}
-	}
-
-	void Config::Dispose()
-	{
-		std::lock_guard<std::mutex> gurad(m_lock);
-		m_sections.clear();
-		m_filename.clear();
-		m_initialized = false;
 	}
 
 	Config& Config::Instance()

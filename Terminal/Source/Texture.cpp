@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -22,7 +22,6 @@
 
 #include <stdexcept>
 #include "Texture.hpp"
-//#include "Utility.hpp"
 #include "OpenGL.hpp"
 #include "Log.hpp"
 
@@ -30,8 +29,7 @@ namespace BearLibTerminal
 {
 	static const GLenum color_format = GL_BGRA;
 
-	//Texture::handle_t Texture::m_currently_bound_handle = 0;
-	std::atomic<uint32_t> Texture::m_currently_bound_handle{0};
+	uint32_t Texture::m_currently_bound_handle{0};
 
 	static bool IsPowerOfTwo(int value)
 	{
@@ -115,8 +113,8 @@ namespace BearLibTerminal
 			Bind();
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, g_texture_filter);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, g_texture_filter);
 			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_size.width, m_size.height, 0, color_format, GL_UNSIGNED_BYTE, (uint8_t*)bitmap.GetData());
 		}
 		else
@@ -168,6 +166,16 @@ namespace BearLibTerminal
 
 		Bind();
 		glTexSubImage2D(GL_TEXTURE_2D, 0, area.left, area.top, area.width, area.height, color_format, GL_UNSIGNED_BYTE, (uint8_t*)bitmap.GetData());
+	}
+
+	void Texture::ApplyTextureFilter()
+	{
+		if (m_handle != 0)
+		{
+			Bind();
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, g_texture_filter);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, g_texture_filter);
+		}
 	}
 
 	Size Texture::GetSize() const

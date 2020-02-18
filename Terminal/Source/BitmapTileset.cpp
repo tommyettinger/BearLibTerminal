@@ -1,9 +1,24 @@
 /*
- * BitmapTileset.cpp
- *
- *  Created on: Oct 17, 2013
- *      Author: Cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2017 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #include "BitmapTileset.hpp"
 #include "LoadBitmap.hpp"
@@ -11,6 +26,7 @@
 #include "Resource.hpp"
 #include "Utility.hpp"
 #include "Palette.hpp"
+#include "Encoding.hpp"
 #include "Log.hpp"
 #include <stdexcept>
 #include <fstream>
@@ -20,62 +36,47 @@
 
 namespace BearLibTerminal
 {
-	BitmapTileset::BitmapTileset(TileContainer& container, OptionGroup& group):
-		StronglyTypedReloadableTileset(container),
-		m_base_code(0),
-		m_alignment(Tile::Alignment::Unknown)
+	BitmapTileset::BitmapTileset(char32_t offset, std::vector<uint8_t> data, OptionGroup& options):
+		Tileset(offset)
 	{
-		if (group.name != L"font" && !try_parse(group.name, m_base_code))
-		{
-			throw std::runtime_error("BitmapTileset: failed to parse base code");
-		}
+		std::unique_ptr<Encoding8> codepage;
 
-		if (!group.attributes.count(L"") || group.attributes[L""].empty())
+		// Try to guess tile size and tileset codepage, it will be rewritten if supplied.
 		{
-			throw std::runtime_error("BitmapTileset: missing or empty main value attribute");
-		}
-
-		std::wstring name = group.attributes[L""];
-
-		// Try to guess anyway, rewrite if supplied
-		{
-			// Try to guess from filename
-			// Note name copy is intentional, it will be modified
-			std::wstring name = group.attributes[L""];
+			// Try to guess from the filename.
+			std::wstring name = options.attributes[L"name"];
 			std::wstring l1, l2;
 
-			// Cut off extension
+			// Cut off extension.
 			size_t n = name.find_last_of(L'.');
 			if (n != std::wstring::npos)
-			{
 				name = name.substr(0, n);
-			}
 
-			// Last part, codepage
+			// Last part -> codepage.
 			n = name.find_last_of(L'_');
 			if (n != std::wstring::npos)
 			{
-				if (n < name.length()-1) l1 = name.substr(n+1);
+				if (n < name.length()-1)
+					l1 = name.substr(n+1);
 				name = name.substr(0, n);
 			}
 
-			// Last part, size
+			// Now, last part -> size.
 			n = name.find_last_of(L'_');
 			if (n != std::wstring::npos)
 			{
-				if (n < name.length()-1) l2 = name.substr(n+1);
+				if (n < name.length()-1)
+					l2 = name.substr(n+1);
 			}
 
 			if (!l1.empty() || !l2.empty())
-			{
-				LOG(Debug, "Bitmap tileset: guessing encoding and tile size: \"" << group.attributes[L""] << "\" -> " << "\"" << l1 << "\", \"" << l2 << "\"");
-			}
+				LOG(Debug, "Bitmap tileset '" << options.attributes[L"name"] << "': guessing tile size (from '" << l2 << "') and codepage (from '" << l1 << "')");
 
 			Size temp_size;
 			if (try_parse(l2, temp_size))
 			{
-				m_tile_size = temp_size;
-				m_codepage = GetUnibyteEncoding(l1);
+				m_bounding_box_size = temp_size;
+				codepage = GetUnibyteEncoding(l1);
 			}
 			else
 			{
@@ -83,255 +84,146 @@ namespace BearLibTerminal
 			}
 		}
 
-		if (group.attributes.count(L"size") && !try_parse(group.attributes[L"size"], m_tile_size))
-		{
+		if (options.attributes.count(L"size") && !try_parse(options.attributes[L"size"], m_bounding_box_size))
 			throw std::runtime_error("BitmapTileset: failed to parse 'size' attribute");
-		}
 
 		Size resize_to;
-		if (group.attributes.count(L"resize") && !try_parse(group.attributes[L"resize"], resize_to))
-		{
+		if (options.attributes.count(L"resize") && !try_parse(options.attributes[L"resize"], resize_to))
 			throw std::runtime_error("BitmapTileset: failed to parse 'resize' attribute");
-		}
 
 		ResizeFilter resize_filter = ResizeFilter::Bilinear;
-		if (group.attributes.count(L"resize-filter") && !try_parse(group.attributes[L"resize-filter"], resize_filter))
-		{
+		if (options.attributes.count(L"resize-filter") && !try_parse(options.attributes[L"resize-filter"], resize_filter))
 			throw std::runtime_error("BitmapTileset: failed to parse 'resize-filter' attribute");
-		}
 
 		ResizeMode resize_mode = ResizeMode::Stretch;
-		if (group.attributes.count(L"resize-mode") && !try_parse(group.attributes[L"resize-mode"], resize_mode))
-		{
+		if (options.attributes.count(L"resize-mode") && !try_parse(options.attributes[L"resize-mode"], resize_mode))
 			throw std::runtime_error("BitmapTileset: failed to parse 'resize-mode' attribute");
-		}
 
-		if (group.attributes.count(L"codepage"))
-		{
-			m_codepage = GetUnibyteEncoding(group.attributes[L"codepage"]); // Should either return an encoding or throw
-		}
+		if (options.attributes.count(L"codepage"))
+			codepage = GetUnibyteEncoding(options.attributes[L"codepage"]); // Should either return an encoding or throw
 
-		if (!m_codepage)
-		{
-			m_codepage = GetUnibyteEncoding(L"utf8");
-		}
+		if (!codepage)
+			codepage = GetUnibyteEncoding(L"utf8");
 
-		if (group.attributes.count(L"bbox") && !try_parse(group.attributes[L"bbox"], m_bbox_size))
-		{
-			throw std::runtime_error("BitmapTileset: failed to parse 'bbox' attribute");
-		}
-
-		if (group.attributes.count(L"spacing") && !try_parse(group.attributes[L"spacing"], m_bbox_size))
-		{
+		m_spacing = Size{1, 1};
+		if (options.attributes.count(L"spacing") && !try_parse(options.attributes[L"spacing"], m_spacing))
 			throw std::runtime_error("BitmapTileset: failed to parse 'spacing' attribute");
-		}
 
-		if (group.attributes.count(L"align") && !try_parse(group.attributes[L"align"], m_alignment))
-		{
+		TileAlignment alignment = TileAlignment::Unknown;
+		if (options.attributes.count(L"align") && !try_parse(options.attributes[L"align"], alignment))
 			throw std::runtime_error("BitmapTileset: failed to parse 'alignment' attribute");
-		}
 
-		uint64_t address = 0;
-		if (name.find(L".") == std::wstring::npos && try_parse(name, address))
+		Size raw_size;
+		if (options.attributes.count(L"raw-size") && !try_parse(options.attributes[L"raw-size"], raw_size))
+			throw std::runtime_error("BitmapTileset: failed to parse 'raw-size' attribute");
+
+		Bitmap image = raw_size.Area()? Bitmap(raw_size, (const Color*)&data[0]): LoadBitmap(data);
+		if (!image.GetSize().Area())
+			throw std::runtime_error("BitmapTileset: loaded image is empty");
+
+		if (options.attributes.count(L"transparent"))
 		{
-			LOG(Debug, "Bitmap tileset name \"" << name << "\" is a memory address");
-
-			Size raw_size;
-			if (group.attributes.count(L"raw-size") && !try_parse(group.attributes[L"raw-size"], raw_size))
+			std::wstring name = options.attributes[L"transparent"];
+			if (name == L"auto")
 			{
-				throw std::runtime_error("BitmapTileset: failed to parse 'raw-size' attribute");
+				if (!image.HasAlpha())
+				{
+					image.MakeTransparent(image(0, 0));
+				}
 			}
-
-			if (!raw_size.Area() && m_tile_size.Area())
+			else if (name != L"false")
 			{
-				raw_size = m_tile_size;
+				image.MakeTransparent(Palette::Instance.Get(name));
 			}
-
-			if (!raw_size.Area())
-			{
-				throw std::runtime_error("BitmapTileset: cannot guess bitmap dimensions for raw bitmap resource");
-			}
-
-			const Color* pixels = (const Color*)address;
-			m_cache = Bitmap(raw_size, pixels);
-		}
-		else
-		{
-			m_cache = LoadBitmap(*Resource::Open(name, L"tileset-"));
 		}
 
-		if (!m_cache.GetSize().Area())
-		{
-			throw std::runtime_error("BitmapTileset: loaded image is empty (zero-sized)");
-		}
-
-		if (resize_to.Area())
-		{
-			LOG(Trace, "BitmapTileset: resizing tileset image to " << resize_to << " with " << resize_filter << " filter, " << resize_mode << " mode");
-			Size prev = m_cache.GetSize();
-			m_cache = m_cache.Resize(resize_to, resize_filter, resize_mode);
-		}
-
-		if (group.attributes.count(L"transparent"))
-		{
-			std::wstring& name = group.attributes[L"transparent"];
-			Color mask = name == L"auto"? m_cache(0, 0): Palette::Instance[name];
-			m_cache.MakeTransparent(mask);
-		}
-
-		if (!m_tile_size.Area())
-		{
-			m_tile_size = m_cache.GetSize();
-		}
-		else if (!Rectangle(m_cache.GetSize()).Contains(Rectangle(m_tile_size)))
-		{
+		if (!m_bounding_box_size.Area())
+			m_bounding_box_size = image.GetSize();
+		else if (!Rectangle{image.GetSize()}.Contains(Rectangle{m_bounding_box_size}))
 			throw std::runtime_error("Bitmap tileset: bitmap is smaller than tile size");
-		}
 
-		if (m_bbox_size.width < 1 || m_bbox_size.height < 1)
-		{
-			m_bbox_size = Size(1, 1);
-		}
+		if (m_bounding_box_size.width < 1 || m_bounding_box_size.height < 1)
+			m_bounding_box_size = Size{1, 1};
 
-		// Adjust tile size accordingly
+		Size source_tile_size = m_bounding_box_size;
 		if (resize_to.Area())
 		{
-			float hf = resize_to.width/(float)m_tile_size.width;
-			float vf = resize_to.height/(float)m_tile_size.height;
-			m_tile_size.width *= hf;
-			m_tile_size.height *= vf;
+			LOG(Debug, "BitmapTileset: changing tile size " << m_bounding_box_size << " -> " << resize_to);
+			m_bounding_box_size = resize_to;
 		}
 
-		Size image_size = m_cache.GetSize();
-		int columns = (int)std::floor(image_size.width / (float)m_tile_size.width);
-		int rows = (int)std::floor(image_size.height / (float)m_tile_size.height);
-		m_grid_size = Size(columns, rows);
+		Size image_size = image.GetSize();
+		int columns = image_size.width / source_tile_size.width;
+		int rows = image_size.height / source_tile_size.height;
+		Size grid_size = Size{columns, rows};
 		LOG(Debug, "Tileset has " << columns << "x" << rows << " tiles");
 
-		if (m_alignment == Tile::Alignment::Unknown)
+		if (alignment == TileAlignment::Unknown)
 		{
-			if (m_grid_size.Area() > 1)
-			{
-				m_alignment = Tile::Alignment::Center;
-			}
-			else
-			{
-				m_alignment = Tile::Alignment::TopLeft;
-			}
-		}
-	}
-
-	bool BitmapTileset::Save()
-	{
-		// Tiles are provided on-demand.
-		return true;
-	}
-
-	void BitmapTileset::Remove()
-	{
-		for (auto i: m_tiles)
-		{
-			if (m_container.slots.count(i.first) && m_container.slots[i.first].get() == i.second.get())
-			{
-				m_container.slots.erase(i.first);
-			}
-
-			m_container.atlas.Remove(i.second);
+			// By default, single tiles (usually sprites) are aligned top-left.
+			// Tilesets (usually fonts, map tiles, etc.) on the other hand are aligned centered.
+			alignment = grid_size.Area() > 1? TileAlignment::Center: TileAlignment::TopLeft;
 		}
 
-		m_tiles.clear();
-	}
-
-	void BitmapTileset::Reload(BitmapTileset&& tileset)
-	{
-		bool eligible_to_update =
-			(m_tile_size == tileset.m_tile_size) &&
-			(m_bbox_size == tileset.m_bbox_size) &&
-			(m_codepage->GetName() == tileset.m_codepage->GetName()) &&
-			(m_alignment == tileset.m_alignment) &&
-			(m_tiles.size() == 1) &&
-			(m_tiles.begin()->second->texture_region.Size() == tileset.m_cache.GetSize());
-
-		if (eligible_to_update)
+		auto keep_tile = [&](int x, int y, char32_t code)
 		{
-			// Tileset contains exactly one tile with the same dimensions and
-			// all other parameters are the same.
-			// Note that Reload is only used new objects so m_cache is not empty yet.
-			m_tiles.begin()->second->Update(tileset.m_cache);
+			auto tile = std::make_shared<TileInfo>();
+			tile->tileset = this;
+			tile->bitmap = image.Extract(Rectangle{Point{x * source_tile_size.width, y * source_tile_size.height}, source_tile_size});
+			if (resize_to.Area())
+				tile->bitmap = tile->bitmap.Resize(resize_to, resize_filter, resize_mode);
+			tile->spacing = m_spacing;
+			tile->alignment = alignment;
+			if (alignment == TileAlignment::Center)
+			{
+				// TODO: round in a way to compensate state.half_cellsize rounding error
+				tile->offset = Point(-m_bounding_box_size.width/2, -m_bounding_box_size.height/2);
+			}
+			else if (alignment == TileAlignment::DeadCenter)
+			{
+				Point center = tile->bitmap.CenterOfMass();
+				tile->offset = Point(-center.x, -center.y);
+			}
+
+			m_cache[code] = tile;
+		};
+
+		if (Tileset::IsFontOffset(offset))
+		{
+			// Font.
+			for (int y = 0; y < rows; y++)
+			{
+				for (int x = 0; x < columns; x++)
+				{
+					char32_t code = offset + codepage->Convert(y * columns + x);
+					if (code != kUnicodeReplacementCharacter)
+					{
+						keep_tile(x, y, code);
+					}
+				}
+			}
 		}
 		else
 		{
-			// Another tileset should contain already validated cache/size/codepage,
-			// it should be safe to use them to reinitialize tileset.
-			Remove();
-			m_cache = std::move(tileset.m_cache);
-			m_tile_size = tileset.m_tile_size;
-			m_grid_size = tileset.m_grid_size;
-			m_codepage = std::move(tileset.m_codepage);
-			Save();
+			// Tileset: uses a reverese codepage (linear index 0..N -> tile index).
+			for (int i = 0; m_cache.size() < grid_size.Area(); i++)
+			{
+				int index = codepage->Convert(i);
+
+				if (index == kUnicodeReplacementCharacter)
+					break;
+				else if (index < 0 || index >= grid_size.Area())
+					continue;
+
+				int x = index % columns;
+				int y = (index - x) / columns;
+				keep_tile(x, y, offset + i);
+			}
 		}
 	}
 
 	Size BitmapTileset::GetBoundingBoxSize()
 	{
-		return m_tile_size;
-	}
-
-	Size BitmapTileset::GetSpacing()
-	{
-		return m_bbox_size;
-	}
-
-	const Encoding<char>* BitmapTileset::GetCodepage()
-	{
-		return m_codepage.get();
-	}
-
-	Tileset::Type BitmapTileset::GetType()
-	{
-		return Type::Bitmap;
-	}
-
-	bool BitmapTileset::Provides(uint16_t code)
-	{
-		if (code < m_base_code) return false;
-		int index = code - m_base_code;
-		if (m_base_code == 0) index = m_codepage->Convert((wchar_t)index);
-		return (index >= 0 && index <= m_grid_size.Area());
-	}
-
-	void BitmapTileset::Prepare(uint16_t code)
-	{
-		if (!m_tiles.count(code))
-		{
-			Point offset;
-			if (m_alignment == Tile::Alignment::Center)
-			{
-				// TODO: round in a way to compensate state.half_cellsize rounding error
-				offset = Point(-m_tile_size.width/2, -m_tile_size.height/2);
-			}
-
-			if (code < m_base_code) return;
-			int index = code - m_base_code;
-			if (m_base_code == 0) index = m_codepage->Convert((wchar_t)index);
-
-			int column = index % m_grid_size.width;
-			int row = (index-column) / m_grid_size.width;
-
-			Rectangle region(Point(column*m_tile_size.width, row*m_tile_size.height), m_tile_size);
-			auto tile_slot = m_container.atlas.Add(m_cache, region);
-			tile_slot->offset = offset;
-			tile_slot->alignment = m_alignment;
-			tile_slot->bounds = m_bbox_size;
-			m_tiles[code] = tile_slot;
-
-			if (m_tiles.size() == m_grid_size.Area())
-			{
-				// Every tile was added to container, cache is not necessary anymore.
-				m_cache = Bitmap();
-			}
-		}
-
-		m_container.slots[code] = std::dynamic_pointer_cast<Slot>(m_tiles[code]);
+		return m_bounding_box_size;
 	}
 }

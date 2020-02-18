@@ -1,6 +1,6 @@
 /*
 * BearLibTerminal
-* Copyright (C) 2013 Cfyz
+* Copyright (C) 2013-2016 Cfyz
 *
 * Permission is hereby granted, free of charge, to any person obtaining a copy
 * of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,6 @@
 #define BEARLIBTERMINAL_TEXTURE_HPP
 
 #include <cstdint>
-#include <atomic>
 #include "Bitmap.hpp"
 #include "Size.hpp"
 
@@ -44,6 +43,7 @@ namespace BearLibTerminal
 		void Bind();
 		void Update(const Bitmap& bitmap);
 		void Update(Rectangle area, const Bitmap& bitmap);
+		void ApplyTextureFilter();
 		Bitmap Download();
 		Size GetSize() const;
 		handle_t GetHandle() const;
@@ -55,7 +55,7 @@ namespace BearLibTerminal
 	protected:
 		handle_t m_handle;
 		Size m_size;
-		static std::atomic<uint32_t> m_currently_bound_handle;
+		static uint32_t m_currently_bound_handle;
 	};
 }
 

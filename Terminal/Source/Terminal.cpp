@@ -1,9 +1,24 @@
 /*
- * Terminal.cpp
- *
- *  Created on: Sep 18, 2013
- *      Author: Cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2017 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #include "Terminal.hpp"
 #include "OpenGL.hpp"
@@ -15,6 +30,7 @@
 #include <cmath>
 #include <future>
 #include <vector>
+#include <locale.h>
 
 #include <iostream>
 #include "Config.hpp"
@@ -35,12 +51,14 @@ namespace BearLibTerminal
 
 namespace BearLibTerminal
 {
+	std::unique_ptr<Terminal> g_instance;
+
 	static std::vector<float> kScaleSteps =
 	{
 		0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f
 	};
 
-	static int kScaleDefault = 1;
+	static const int kScaleDefault = 1;
 
 	static int GetInputEventNameByName(const std::wstring& name)
 	{
@@ -140,6 +158,7 @@ namespace BearLibTerminal
 			{L"kp-period", TK_KP_PERIOD},
 			{L"shift", TK_SHIFT},
 			{L"control", TK_CONTROL},
+			{L"alt", TK_ALT},
 			{L"mouse-left", TK_MOUSE_LEFT},
 			{L"mouse-right", TK_MOUSE_RIGHT},
 			{L"mouse-middle", TK_MOUSE_MIDDLE},
@@ -155,24 +174,51 @@ namespace BearLibTerminal
 		return i == mapping.end()? 0: i->second;
 	}
 
+	static std::wstring Escape(const std::wstring& s)
+	{
+		std::wstring result = L"'";
+		for (auto c: s)
+		{
+			result += c;
+			if (c == L'\'')
+				result += c;
+		}
+		result += L"'";
+		return result;
+	}
+
 	Terminal::Terminal():
 		m_state{kHidden},
-		m_vars{},
 		m_show_grid{false},
 		m_viewport_modified{false},
-		m_scale_step(kScaleDefault)
+		m_scale_step(kScaleDefault),
+		m_alt_pressed(false)
 	{
+#if defined(__APPLE__)
+		// OS X implementation of C-string manipulation routines (e. g. swprintf)
+		// do not accept wide characters (i. e. wide strings at all) unless
+		// the character classification locale is set to UTF-8. And default one is "C".
+		if (setlocale(LC_CTYPE, "UTF-8") == nullptr)
+			LOG(Error, "Failed to set LC_CTYPE locale to UTF-8");
+#endif
+
+		// Save main thread ID so we can catch threading violations.
+		m_main_thread_id = std::this_thread::get_id();
+
+		// Elements of std::array are not default-initialized.
+		for (auto& var: m_vars)
+			var = 0;
+
 		// Synchronize log settings (logger reads them from config file but they may be left default).
-		m_options.log_filename = Log::Instance().GetFile();
-		m_options.log_level = Log::Instance().GetLevel();
-		m_options.log_mode = Log::Instance().GetMode();
+		m_options.log_filename = Log::Instance().filename;
+		m_options.log_level = Log::Instance().level;
+		m_options.log_mode = Log::Instance().mode;
 
 		// Try to create window
-		m_window = Window::Create();
-		m_window->SetEventHandler(std::bind(&Terminal::OnWindowEvent, this, std::placeholders::_1));
+		m_window = Window::Create(std::bind(&Terminal::OnWindowEvent, this, std::placeholders::_1));
 
 		// Default parameters
-		SetOptionsInternal(L"window: size=80x25, icon=default; font: default; terminal.encoding=utf8");
+		SetOptionsInternal(L"window: size=80x25, icon=default; font: default; terminal.encoding=utf8; input.filter={keyboard}");
 
 		// Apply parameters from configuration file:
 		// Each group (line) is applied separately to allow some error resilience.
@@ -183,22 +229,54 @@ namespace BearLibTerminal
 			// TODO: use some more readable "split" function
 			std::wstring group = pair.first.substr(0, pair.first.find(L'.'));
 			std::wstring property = group.length() >= pair.first.length()-1?
-				L"name": pair.first.substr(group.length()+1);
-			groups[group] += group + L"." + property + L"=" + pair.second + L";";
+				L"_": pair.first.substr(group.length()+1);
+			groups[group] += group + L"." + property + L"=" + Escape(pair.second) + L";";
 		}
 		for (auto& pair: groups)
 			SetOptions(pair.second);
+		LOG(Info, "Applying palette from configuration file");
+		for (auto& pair: Config::Instance().List(L"ini.palette"))
+		{
+			Color value = Palette::Instance.Get(pair.second);
+			LOG(Info, "* '" << pair.first << "' = '" << pair.second << "' (a=" << (int)value.a << ", r=" << (int)value.r << ", g=" << (int)value.g << ", b=" << (int)value.b << ")");
+			Palette::Instance.Set(pair.first, value);
+		}
 		LOG(Info, "Terminal initialization complete");
 	}
 
 	Terminal::~Terminal()
 	{
-		m_window->Stop();
-		m_window.reset(); // TODO: is it needed?
+		g_codespace.clear();
+		g_tilesets.clear();
+		g_atlas.Clear();
+
+		// Window will be disposed of automatically.
+	}
+
+	// NOTE: not every API function checks this, only functions dealing with configuration,
+	// input and rendering: set, refresh, has_input, read, read_str, peek and delay.
+	// NOTE: this introduces an unlikely data race which should be acceptable in this particular case.
+	#define CHECK_THREAD(name, ret) \
+	if (m_state == kClosed) { \
+		return ret; \
+	} else if (std::this_thread::get_id() != m_main_thread_id) { \
+		LOG(Fatal, "'" name "' was not called from the main thread"); \
+		m_state = kClosed; \
+		return ret; \
 	}
 
 	int Terminal::SetOptions(const std::wstring& value)
 	{
+		CHECK_THREAD("set", 0);
+
+		// XXX: hack.
+		if (value.find(L"log(") == 0)
+		{
+			if (value.length() > 7) // Seven because quotes.
+				LOG(Info, value.substr(5, value.length() - 7));
+			return 1;
+		}
+
 		LOG(Info, "Trying to set \"" << value << "\"");
 		try
 		{
@@ -212,90 +290,148 @@ namespace BearLibTerminal
 		}
 	}
 
-	void Terminal::ApplyTilesets(std::map<uint16_t, std::unique_ptr<Tileset>>& new_tilesets)
+	std::map<std::wstring, int> g_fonts;
+
+	int AllocateFontIndex(std::wstring name, std::map<std::wstring, int>& preallocated_fonts)
 	{
-		for (auto& i: new_tilesets)
+		// Clean up.
+		for (auto i = g_fonts.begin(); i != g_fonts.end(); )
 		{
-			auto j = m_world.tilesets.find(i.first);
-
-			if (i.second)
+			char32_t font_offset = i->second * 0x1000000;
+			auto j = g_tilesets.lower_bound(font_offset);
+			if (j == g_tilesets.end() || (j->first & Tileset::kFontOffsetMask) != font_offset)
 			{
-				// Add/update tileset
-				if (j == m_world.tilesets.end())
-				{
-					// New tileset: add to registry and save
-					m_world.tilesets[i.first] = std::move(i.second);
-					m_world.tilesets[i.first]->Save();
-					LOG(Debug, "Saved new tileset for base code " << i.first);
-				}
-				else
-				{
-					// Update an already existing one
-					if (typeid(*i.second) == typeid(*j->second))
-					{
-						// Same type, reload
-						j->second->Reload(std::move(*i.second));
-						LOG(Debug, "Reloaded the tileset with base code " << i.first);
-					}
-					else
-					{
-						// Different types, replace
-						j->second->Remove();
-						LOG(Debug, "Unloaded old tileset for base code " << i.first);
-
-						j->second = std::move(i.second);
-						j->second->Save();
-						LOG(Debug, "Saved new tileset for base code " << i.first);
-					}
-				}
+				// The first tileset with offset >= font_offset does not belong to this font.
+				// Meaning there is no tilesets belonging to this font.
+				i = g_fonts.erase(i);
 			}
 			else
 			{
-				// Empty pointer, remove tileset
-				if (i.first > 0)
-				{
-					if (j != m_world.tilesets.end())
-					{
-						// Remove the tileset
-						m_world.tilesets[i.first]->Remove();
-						m_world.tilesets.erase(i.first);
-						LOG(Debug, "Unloaded the tileset for base code " << i.first);
-					}
-				}
-				else
-				{
-					LOG(Warning, "Tileset with base code 0 cannot be unloaded");
-				}
+				i++;
 			}
 		}
+
+		auto contains_value = [](std::map<std::wstring, int>& map, int value)
+		{
+			for (auto kv: map)
+			{
+				if (kv.second == value)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		// Look up first available index.
+		for (int i = 0; ; i++)
+		{
+			if (!contains_value(preallocated_fonts, i) && !contains_value(g_fonts, i))
+			{
+				LOG(Info, "New font '" << name << "' -> index " << i);
+				preallocated_fonts[name] = i;
+				return i;
+			}
+		}
+
+		return -1;
 	}
 
-	void Terminal::UpdateDynamicTileset(Size size)
+	char32_t ParseTilesetOffset(std::wstring name, std::map<std::wstring, int>& preallocated_fonts)
 	{
-		auto& tileset = m_world.tilesets[kUnicodeReplacementCharacter];
-		if (tileset) tileset->Remove();
+		char32_t font_offset = 0;
+		std::wstring font_name = L"main";
+		size_t space_pos = name.find(L' ');
+		if (space_pos != std::wstring::npos && space_pos < name.length()-1)
+		{
+			font_name = name.substr(0, space_pos);
+			name = name.substr(space_pos+1);
+		}
 
-		OptionGroup options;
-		options.name = L"0xFFFF";
-		options.attributes[L""] = L"dynamic";
-		options.attributes[L"size"] = to_string<wchar_t>(size);
+		std::map<std::wstring, int>::iterator i;
+		if ((i = g_fonts.find(font_name)) != g_fonts.end() ||
+		    (i = preallocated_fonts.find(font_name)) != preallocated_fonts.end())
+		{
+			font_offset = i->second * Tileset::kFontOffsetMultiplier;
+		}
+		else
+		{
+			font_offset = AllocateFontIndex(font_name, preallocated_fonts) * Tileset::kFontOffsetMultiplier;
+		}
 
-		tileset = Tileset::Create(m_world.tiles, options);
-		tileset->Save();
+		if (name == L"font")
+		{
+			return font_offset;
+		}
+
+		char32_t tileset_offset = 0;
+		if (!try_parse(name, tileset_offset))
+		{
+			throw std::runtime_error("Failed to parse tileset offset from '" + UTF8Encoding().Convert(name) + "'");
+		}
+
+		return font_offset + tileset_offset;
+	}
+
+	TileInfo* GetTileInfo(char32_t code)
+	{
+		auto i = g_codespace.find(code);
+		if (i != g_codespace.end())
+			return i->second.get();
+
+		char32_t font_low = (code & Tileset::kFontOffsetMask);
+		char32_t font_high = font_low + Tileset::kCharOffsetMask;
+
+		for (auto j = g_tilesets.rbegin(); j != g_tilesets.rend(); ++j)
+		{
+			if (j->first < font_low || j->first > font_high)
+			{
+				continue;
+			}
+
+			if (j->second->Provides(code))
+			{
+				auto tile = j->second->Get(code);
+				g_codespace[code] = tile;
+				g_atlas.Add(tile);
+				return tile.get();
+			}
+		}
+
+		if (IsDynamicTile(code))
+		{
+			if (g_dynamic_tileset)
+			{
+				auto tile = g_dynamic_tileset->Get(code);
+				g_codespace[code] = tile;
+				g_atlas.Add(tile);
+				return tile.get();
+			}
+			else
+			{
+				return nullptr;
+			}
+		}
+		else
+		{
+			return GetTileInfo(font_low + kUnicodeReplacementCharacter);
+		}
 	}
 
 	void Terminal::SetOptionsInternal(const std::wstring& value)
 	{
-		std::lock_guard<std::mutex> guard(m_lock);
-
 		auto groups = ParseOptions2(value);
 		Options updated = m_options;
-		std::map<uint16_t, std::unique_ptr<Tileset>> new_tilesets;
+		std::unordered_map<char32_t, std::shared_ptr<Tileset>> new_tilesets;
+		std::unordered_map<std::wstring, Color> palette_update;
+		std::map<std::wstring, int> preallocated_fonts;
 
 		// Validate options
 		for (auto& group: groups)
 		{
 			LOG(Debug, L"Group \"" << group.name << "\":");
+
 			for (auto attribute: group.attributes)
 			{
 				LOG(Debug, L"* \"" << attribute.first << "\" = \"" << attribute.second << "\"");
@@ -329,38 +465,66 @@ namespace BearLibTerminal
 					Config::Instance().Set(group.name + L"." + i.first, i.second);
 				}
 			}
+			else if (group.name == L"palette")
+			{
+				for (auto kv: group.attributes)
+				{
+					palette_update[kv.first] = Palette::Instance.Get(kv.second);
+				}
+			}
 			else
 			{
-				uint16_t base_code = 0; // Basic font base_code is 0
-				if (group.name == L"font" || try_parse(group.name, base_code))
+				char32_t offset = ParseTilesetOffset(group.name, preallocated_fonts);
+				if (group.attributes[L"_"] == L"none")
 				{
-					new_tilesets[base_code] = Tileset::Create(m_world.tiles, group);
-					LOG(Debug, "Successfully loaded a tileset for base code " << base_code);
+					// Remove tileset.
+					new_tilesets[offset].reset();
+				}
+				else
+				{
+					// Add new tileset.
+					group.name = to_string<wchar_t>(offset);
+					new_tilesets[offset] = Tileset::Create(group, offset);
 				}
 			}
 		}
 
 		if (updated.output_vsync != m_options.output_vsync)
 		{
-			m_window->SetVSync(updated.output_vsync);
+			m_viewport_modified = true;
+		}
+
+		if (updated.output_texture_filter != m_options.output_texture_filter)
+		{
+			g_texture_filter = updated.output_texture_filter;
+			g_atlas.ApplyTextureFilter();
 		}
 
 		// All options and parameters must be validated, may try to apply them
-		if (!new_tilesets.empty())
+		for (auto& kv: preallocated_fonts)
 		{
-			ApplyTilesets(new_tilesets);
+			g_fonts[kv.first] = kv.second;
 		}
+		for (auto& kv: new_tilesets)
+		{
+			RemoveTileset(kv.first);
+			if (kv.second)
+				AddTileset(kv.second);
+		}
+		g_atlas.Defragment();
+		g_atlas.CleanUp();
 
 		// Primary sanity check: if there is no base font, lots of things are gonna fail
-		if (!m_world.tilesets.count(0))
-		{
-			throw std::runtime_error("No base font has been configured");
-		}
+		if (!g_tilesets.count(0))
+			throw std::runtime_error("No main font has been configured");
 
-		// Such implementation is awful. Should use some global (external library?) instance.
-		if (updated.log_filename != m_options.log_filename) Log::Instance().SetFile(updated.log_filename);
-		if (updated.log_level != m_options.log_level) Log::Instance().SetLevel(updated.log_level);
-		if (updated.log_mode != m_options.log_mode) Log::Instance().SetMode(updated.log_mode);
+		// Apply palette
+		for (auto kv: palette_update)
+			Palette::Instance.Set(kv.first, kv.second);
+
+		Log::Instance().filename = updated.log_filename;
+		Log::Instance().level = updated.log_level;
+		Log::Instance().mode = updated.log_mode;
 
 		if (updated.terminal_encoding != m_options.terminal_encoding)
 		{
@@ -370,6 +534,7 @@ namespace BearLibTerminal
 		if (updated.input_mouse_cursor != m_options.input_mouse_cursor)
 		{
 			m_window->SetCursorVisibility(updated.input_mouse_cursor);
+			// FIXME: NYI
 		}
 
 		// Apply on per-option basis
@@ -388,6 +553,7 @@ namespace BearLibTerminal
 
 		if (updated.window_resizeable != m_options.window_resizeable)
 		{
+			// XXX: It's not always possible to change resizeability in runtime.
 			m_window->SetResizeable(updated.window_resizeable);
 
 			if (updated.window_resizeable)
@@ -396,13 +562,6 @@ namespace BearLibTerminal
 				// This one handles client-size set before resizeable
 				updated.window_client_size = Size();
 			}
-		}
-
-		if (updated.window_resizeable && m_scale_step != kScaleDefault)
-		{
-			// No scaling in resizeable mode, at least not yet.
-			m_scale_step = kScaleDefault;
-			viewport_size_changed = true;
 		}
 
 		// If the size of cell has changed -OR- new basic tileset has been specified
@@ -418,7 +577,8 @@ namespace BearLibTerminal
 			{
 				// NOTE: by now, tileset container MUST have 0th tileset since
 				// one is added in ctor and cannot be fully removed afterwards.
-				m_world.state.cellsize = m_world.tilesets[0]->GetBoundingBoxSize();
+				//m_world.state.cellsize = m_world.tilesets[0]->GetBoundingBoxSize();
+				m_world.state.cellsize = g_tilesets[0]->GetBoundingBoxSize();
 			}
 
 			// Cache half cellsize
@@ -485,22 +645,18 @@ namespace BearLibTerminal
 				m_world.stage.size * m_world.state.cellsize * scale_factor;
 			m_vars[TK_CLIENT_WIDTH] = viewport_size.width;
 			m_vars[TK_CLIENT_HEIGHT] = viewport_size.height;
+
 			m_window->SetSizeHints(m_world.state.cellsize*scale_factor, updated.window_minimum_size);
 			m_window->SetClientSize(viewport_size);
+
 			m_viewport_modified = true;
 		}
 
-		if (updated.window_toggle_fullscreen)
+		if (updated.window_fullscreen != m_options.window_fullscreen)
 		{
-			m_window->ToggleFullscreen();
-			updated.window_toggle_fullscreen = false;
+			// XXX: It's not always possible to change fullscreen state in runtime.
+			m_window->SetFullscreen(updated.window_fullscreen);
 		}
-
-		// Do not touch input lock. Input handlers should just take main lock if necessary.
-		/*
-		// Briefly grab input lock so that input routines do not contend for m_options
-		std::lock_guard<std::mutex> input_guard(m_input_lock);
-		//*/
 
 		m_options = updated;
 
@@ -519,15 +675,16 @@ namespace BearLibTerminal
 		C.Set(L"window.icon", m_options.window_icon);
 		C.Set(L"window.resizeable", bool_to_wstring(m_options.window_resizeable));
 		C.Set(L"window.minimum-size", size_to_wstring(m_options.window_minimum_size));
-		C.Set(L"window.fullscreen", bool_to_wstring(m_options.window_toggle_fullscreen)); // WTF
+		C.Set(L"window.fullscreen", bool_to_wstring(m_options.window_fullscreen));
 		// input
 		C.Set(L"input.precise-mouse", bool_to_wstring(m_options.input_precise_mouse));
 		//C.Set(L"input.filter", m_options.input_filter_str); // FIXME
 		C.Set(L"input.cursor-symbol", std::wstring(1, (wchar_t)m_options.input_cursor_symbol));
 		C.Set(L"input.cursor-blink-rate", to_string<wchar_t>(m_options.input_cursor_blink_rate));
 		C.Set(L"input.mouse-cursor", bool_to_wstring(m_options.input_mouse_cursor));
+		C.Set(L"input.alt-functions", bool_to_wstring(m_options.input_alt_functions));
 		// output
-		C.Set(L"input.vsync", bool_to_wstring(m_options.output_vsync));
+		C.Set(L"output.vsync", bool_to_wstring(m_options.output_vsync));
 		// log
 		C.Set(L"input.file", m_options.log_filename);
 		C.Set(L"input.level", to_string<wchar_t>(m_options.log_level));
@@ -545,7 +702,7 @@ namespace BearLibTerminal
 
 		if (group.attributes.count(L"encoding-affects-put"))
 		{
-			try_parse<bool>(group.attributes[L"encoding-affects-put"], options.terminal_encoding_affects_put);
+			try_parse(group.attributes[L"encoding-affects-put"], options.terminal_encoding_affects_put);
 		}
 	}
 
@@ -562,7 +719,7 @@ namespace BearLibTerminal
 				throw std::runtime_error("window.size value cannot be parsed");
 			}
 
-			if (value.width <= 0 || value.width >= 256 || value.height <= 0 || value.height >= 256)
+			if (value.width <= 0 || value.width >= 1024 || value.height <= 0 || value.height >= 1024)
 			{
 				throw std::runtime_error("window.size value is out of range");
 			}
@@ -611,11 +768,6 @@ namespace BearLibTerminal
 
 		if (group.attributes.count(L"icon"))
 		{
-			if (!m_window->ValidateIcon(group.attributes[L"icon"]))
-			{
-				throw std::runtime_error("window.icon cannot be loaded");
-			}
-
 			options.window_icon = group.attributes[L"icon"];
 		}
 
@@ -636,33 +788,20 @@ namespace BearLibTerminal
 
 		if (group.attributes.count(L"fullscreen"))
 		{
-			bool desired_state = false;
-
-			if (!try_parse(group.attributes[L"fullscreen"], desired_state))
+			if (!try_parse(group.attributes[L"fullscreen"], options.window_fullscreen))
 			{
 				throw std::runtime_error("window.fullscreen value cannot be parsed");
-			}
-
-			if (desired_state != m_window->IsFullscreen())
-			{
-				options.window_toggle_fullscreen = true;
 			}
 		}
 	}
 
 	void Terminal::ValidateInputOptions(OptionGroup& group, Options& options)
 	{
-		// Possible options: nonblocking, events, precise_mouse, sticky_close, cursor_symbol, cursor_blink_rate
+		// Possible options: nonblocking, events, precise_mouse, cursor_symbol, cursor_blink_rate
 
 		if (group.attributes.count(L"precise-mouse") && !try_parse(group.attributes[L"precise-mouse"], options.input_precise_mouse))
 		{
 			throw std::runtime_error("input.precise-mouse cannot be parsed");
-		}
-
-		// TODO: deprecated
-		if (group.attributes.count(L"sticky-close") && !try_parse(group.attributes[L"sticky-close"], options.input_sticky_close))
-		{
-			throw std::runtime_error("input.sticky-close cannot be parsed");
 		}
 
 		if (group.attributes.count(L"filter") && !ParseInputFilter(group.attributes[L"filter"], options.input_filter))
@@ -680,11 +819,17 @@ namespace BearLibTerminal
 			throw std::runtime_error("input.cursor-blink-rate cannot be parsed");
 		}
 
-		if (options.input_cursor_blink_rate <= 0) options.input_cursor_blink_rate = 1;
+		if (options.input_cursor_blink_rate < 0)
+			options.input_cursor_blink_rate = 0;
 
 		if (group.attributes.count(L"mouse-cursor") && !try_parse(group.attributes[L"mouse-cursor"], options.input_mouse_cursor))
 		{
 			throw std::runtime_error("input.mouse-cursor cannot be parsed");
+		}
+
+		if (group.attributes.count(L"alt-functions") && !try_parse(group.attributes[L"alt-functions"], options.input_alt_functions))
+		{
+			throw std::runtime_error("input.alt-functions cannot be parsed");
 		}
 	}
 
@@ -722,18 +867,13 @@ namespace BearLibTerminal
 
 				if (!name.empty())
 				{
-					if (name == L"false")
+					if (name == L"false" || name == L"none")
 					{
 						result.clear();
 					}
-					else if (name == L"system")
-					{
-						add(TK_CLOSE, release_too);
-						add(TK_RESIZED, release_too);
-					}
 					else if (name == L"keyboard")
 					{
-						for (int i = TK_A; i <= TK_CONTROL; i++)
+						for (int i = TK_A; i <= TK_ALT; i++)
 							add(i, release_too);
 					}
 					else if (name == L"arrows")
@@ -786,6 +926,12 @@ namespace BearLibTerminal
 			start = end+1;
 		}
 
+		if (!result.empty())
+		{
+			result.insert(TK_CLOSE);
+			result.insert(TK_RESIZED);
+		}
+
 		out = result;
 
 		return true;
@@ -793,7 +939,7 @@ namespace BearLibTerminal
 
 	void Terminal::ValidateOutputOptions(OptionGroup& group, Options& options)
 	{
-		// Possible options: postformatting, vsync
+		// Possible options: postformatting, vsync, tab-width
 
 		// TODO: deprecated
 		if (group.attributes.count(L"postformatting") && !try_parse(group.attributes[L"postformatting"], options.output_postformatting))
@@ -804,6 +950,24 @@ namespace BearLibTerminal
 		if (group.attributes.count(L"vsync") && !try_parse(group.attributes[L"vsync"], options.output_vsync))
 		{
 			throw std::runtime_error("output.vsync cannot be parsed");
+		}
+
+		if (group.attributes.count(L"tab-width") && !try_parse(group.attributes[L"tab-width"], options.output_tab_width))
+		{
+			throw std::runtime_error("output.tab-width cannot be parsed");
+		}
+
+		if (options.output_tab_width < 0)
+			options.output_tab_width = 0;
+
+		if (group.attributes.count(L"texture-filter"))
+		{
+			if (group.attributes[L"texture-filter"] == L"linear")
+				options.output_texture_filter = GL_LINEAR;
+			else if (group.attributes[L"texture-filter"] == L"nearest")
+				options.output_texture_filter = GL_NEAREST;
+			else
+				throw std::runtime_error("output.texture-filter cannot be parsed");
 		}
 	}
 
@@ -890,25 +1054,17 @@ namespace BearLibTerminal
 #else
 	void Terminal::Refresh()
 	{
+		CHECK_THREAD("refresh", );
+
 		if (m_state == kHidden)
 		{
 			m_window->Show();
 			m_state = kVisible;
 		}
 
-		if (m_state != kVisible) return;
-
-		// Synchronously copy backbuffer to frontbuffer
-		{
-			std::lock_guard<std::mutex> guard(m_lock);
-			m_world.stage.frontbuffer = m_world.stage.backbuffer;
-		}
-
-		m_window->Invoke([&]()
-		{
-			Redraw(false);
-			m_window->SwapBuffers();
-		});
+		m_world.stage.frontbuffer = m_world.stage.backbuffer;
+		m_window->PumpEvents();
+		Render();
 	}
 #endif
 
@@ -917,7 +1073,6 @@ namespace BearLibTerminal
 		if (m_world.stage.backbuffer.background.size() != m_world.stage.size.Area())
 		{
 			LOG(Trace, "World resize");
-			std::lock_guard<std::mutex> guard(m_lock);
 			m_world.stage.Resize(m_world.stage.size);
 		}
 		else
@@ -1000,15 +1155,33 @@ namespace BearLibTerminal
 		m_vars[TK_COMPOSITION] = mode;
 	}
 
-	void Terminal::PutInternal(int x, int y, int dx, int dy, wchar_t code, Color* colors)
+	void Terminal::SetFont(std::wstring name)
+	{
+		if (name.empty() || name == L"main")
+		{
+			m_world.state.font_offset = 0;
+		}
+		else
+		{
+			auto i = g_fonts.find(name);
+			if (i != g_fonts.end())
+			{
+				m_world.state.font_offset = i->second * Tileset::kFontOffsetMultiplier;
+			}
+		}
+	}
+
+	void Terminal::PutInternal(int x, int y, int dx, int dy, char32_t code, Color* colors)
 	{
 		if (x < 0 || y < 0 || x >= m_world.stage.size.width || y >= m_world.stage.size.height) return;
 
-		uint16_t u16code = (uint16_t)code;
-		if (m_world.tiles.slots.find(u16code) == m_world.tiles.slots.end())
-		{
-			m_fresh_codes.push_back(u16code);
-		}
+		// Prepare tile if necessary.
+		TileInfo* tile_info = nullptr;
+		auto it = g_codespace.find(code);
+		if (it != g_codespace.end())
+			tile_info = it->second.get();
+		else
+			tile_info = GetTileInfo(code);
 
 		// NOTE: layer must be already allocated by SetLayer
 		int index = y*m_world.stage.size.width+x;
@@ -1025,7 +1198,7 @@ namespace BearLibTerminal
 			Leaf& leaf = cell.leafs.back();
 
 			// Character
-			leaf.code = u16code;
+			leaf.code = code;
 
 			// Offset
 			leaf.dx = dx;
@@ -1045,7 +1218,13 @@ namespace BearLibTerminal
 			// Background color
 			if (m_world.state.layer == 0 && m_world.state.bkcolor)
 			{
-				m_world.stage.backbuffer.background[index] = m_world.state.bkcolor;
+				for (int by = y; by < std::min(y+tile_info->spacing.height, m_world.stage.size.height); by++)
+				{
+					for (int bx = x; bx < std::min(x+tile_info->spacing.width, m_world.stage.size.width); bx++)
+					{
+						m_world.stage.backbuffer.background[by*m_world.stage.size.width+bx] = m_world.state.bkcolor;
+					}
+				}
 			}
 		}
 		else
@@ -1071,7 +1250,7 @@ namespace BearLibTerminal
 			code = m_encoding->Convert(code);
 		}
 
-		PutInternal(x, y, dx, dy, code, corners);
+		PutInternal(x, y, dx, dy, m_world.state.font_offset + code, corners);
 	}
 
 	int Terminal::Pick(int x, int y, int index)
@@ -1080,7 +1259,9 @@ namespace BearLibTerminal
 
 		int cell_index = y * m_world.stage.size.width + x;
 		auto& cell = m_world.stage.backbuffer.layers[m_world.state.layer].cells[cell_index];
-		wchar_t code = (index >= 0 && index < (int)cell.leafs.size())? (int)cell.leafs[index].code: 0;
+		wchar_t code = 0;
+		if (index >= 0 && index < (int)cell.leafs.size())
+			code = (int)(cell.leafs[index].code & Tileset::kCharOffsetMask);
 
 		// Must take into account possible terminal.encoding codepage.
 		int translated = m_encoding->Convert(code);
@@ -1104,58 +1285,6 @@ namespace BearLibTerminal
 		return m_world.stage.backbuffer.background[cell_index];
 	}
 
-	struct Alignment
-	{
-		Alignment();
-
-		enum // FIXME: enum class
-		{
-			Left,
-			Center,
-			Right,
-			Top,
-			Bottom
-		}
-		horisontal, vertical;
-	};
-
-	Alignment::Alignment():
-		horisontal(Left),
-		vertical(Top)
-	{ }
-
-	bool try_parse(const std::wstring& s, Alignment& out)
-	{
-		size_t hyphen_pos = s.find(L'-');
-
-		// FIXME: rewrite this mess
-		std::wstring vert = hyphen_pos != std::wstring::npos? s.substr(0, hyphen_pos): std::wstring();
-		std::wstring hor = hyphen_pos != std::wstring::npos? (hyphen_pos < s.length()-1? (s.substr(hyphen_pos+1)): std::wstring()): s;
-
-		Alignment result;
-
-		if (vert == L"center")
-		{
-			result.vertical = Alignment::Center;
-		}
-		else if (vert == L"bottom")
-		{
-			result.vertical = Alignment::Bottom;
-		}
-
-		if (hor == L"center")
-		{
-			result.horisontal = Alignment::Center;
-		}
-		else if (hor == L"right")
-		{
-			result.horisontal = Alignment::Right;
-		}
-
-		out = result;
-		return true;
-	}
-
 	struct Line
 	{
 		struct Symbol
@@ -1167,6 +1296,7 @@ namespace BearLibTerminal
 			Size spacing;
 		};
 
+		Line();
 		void UpdateSize();
 		std::vector<Symbol> symbols;
 		Size size;
@@ -1185,9 +1315,12 @@ namespace BearLibTerminal
 		spacing(spacing)
 	{ }
 
+	Line::Line():
+		size(0, 1)
+	{ }
+
 	void Line::UpdateSize()
 	{
-		size = Size(0, 1);
 		for (auto& symbol: symbols)
 		{
 			if (symbol.code <= 0)
@@ -1200,16 +1333,13 @@ namespace BearLibTerminal
 		}
 	}
 
-	int Terminal::Print(int x0, int y0, std::wstring str, bool raw, bool measure_only)
+	Size Terminal::Print(int x0, int y0, int w0, int h0, int align, std::wstring str, bool raw, bool measure_only)
 	{
-		uint16_t base = 0;
-		const Encoding<char>* codepage = nullptr;
+		char32_t font_offset = m_world.state.font_offset;
 		bool combine = false;
 		Point offset = Point(0, 0);
-		Size wrap = Size(0, 0);
-		Alignment alignment;
-		Color original_fore = m_world.state.color;
-		Color original_back = m_world.state.bkcolor;
+		Size wrap = Size{w0, h0};
+		State original_state = m_world.state;
 
 		int x, y, w;
 
@@ -1217,51 +1347,21 @@ namespace BearLibTerminal
 		std::list<Line> lines;
 		lines.emplace_back();
 
-		auto GetTileSpacing = [&](wchar_t code) -> Size // TODO: GetResponsibleTileset?
+		auto GetTileSpacing = [&](char32_t code) -> Size
 		{
-			for (auto i = m_world.tilesets.rbegin(); ; i++)
-			{
-				if (i->first <= code)
-				{
-					return i->second->GetSpacing();
-				}
-			}
+			if (auto tile = GetTileInfo(code))
+				return tile->spacing;
 
 			return Size(1, 1);
 		};
 
-		auto GetTileRelativeIndex = [&](wchar_t code) -> int
+		auto AppendSymbol = [&](char32_t wcode)
 		{
-			for (auto i = m_world.tilesets.rbegin(); ; i++)
-			{
-				if (i->first <= code)
-				{
-					return code - i->first;
-				}
-			}
+			char32_t code = font_offset + wcode;
 
-			return 0;
-		};
-
-		auto AppendSymbol = [&](wchar_t code)
-		{
 			if (code == 0)
 			{
 				return;
-			}
-
-			if (codepage)
-			{
-				code = codepage->Convert(code);
-			}
-
-			if (code > 0)
-			{
-				code += base;
-			}
-			else
-			{
-				code = kUnicodeReplacementCharacter;
 			}
 
 			if (combine)
@@ -1310,27 +1410,27 @@ namespace BearLibTerminal
 
 				std::wstring name = str.substr(i, params_pos-i);
 				std::wstring params = (params_pos < closing_bracket_pos)? str.substr(params_pos+1, closing_bracket_pos-(params_pos+1)): std::wstring();
-				uint16_t arbitrary_code = 0;
+				char32_t arbitrary_code = 0;
 
 				std::function<void()> tag;
 
 				if ((name == L"color" || name == L"c") && !params.empty())
 				{
-					color_t color = Palette::Instance[params];
+					color_t color = Palette::Instance.Get(params);
 					tag = [&, color]{m_world.state.color = color;};
 				}
 				else if (name == L"/color" || name == L"/c")
 				{
-					tag = [&]{m_world.state.color = original_fore;};
+					tag = [&]{m_world.state.color = original_state.color;};
 				}
 				else if ((name == L"bkcolor" || name == L"b") && !params.empty())
 				{
-					color_t color = Palette::Instance[params];
+					color_t color = Palette::Instance.Get(params);
 					tag = [&, color]{m_world.state.bkcolor = color;};
 				}
 				else if (name == L"/bkcolor" || name == L"/b")
 				{
-					tag = [&]{m_world.state.bkcolor = original_back;};
+					tag = [&]{m_world.state.bkcolor = original_state.bkcolor;};
 				}
 				else if (name == L"offset")
 				{
@@ -1345,83 +1445,14 @@ namespace BearLibTerminal
 				{
 					combine = true;
 				}
-				else if (name == L"font" || name == L"base")
+				else if (name == L"font")
 				{
-					size_t colon_pos = params.find(L':');
-					std::wstring codepage_name;
-					if (colon_pos != std::wstring::npos && colon_pos > 0 && colon_pos < params.length()-1)
-					{
-						codepage_name = params.substr(colon_pos+1);
-						params = params.substr(0, colon_pos);
-					}
-
-					if (!try_parse(params, base))
-					{
-						base = 0;
-						codepage = nullptr;
-						continue;
-					}
-
-					if (codepage_name.empty())
-					{
-						// Use tileset codepage
-						auto i = m_world.tilesets.find(base);
-						if (i != m_world.tilesets.end())
-						{
-							codepage = i->second->GetCodepage();
-						}
-						else
-						{
-							codepage = nullptr;
-						}
-					}
-					else
-					{
-						auto cached = m_codepage_cache.find(codepage_name);
-						if (cached != m_codepage_cache.end())
-						{
-							codepage = cached->second.get();
-						}
-						else
-						{
-							if (auto p = GetUnibyteEncoding(codepage_name))
-							{
-								codepage = p.get();
-								m_codepage_cache[codepage_name] = std::move(p);
-							}
-							else
-							{
-								codepage = nullptr;
-							}
-						}
-					}
+					auto i = g_fonts.find(params);
+					font_offset = (i == g_fonts.end()? 0: i->second * 0x01000000);
 				}
-				else if (name == L"/font" || name == L"/base")
+				else if (name == L"/font")
 				{
-					base = 0;
-					codepage = nullptr;
-				}
-				else if (name == L"wrap" || name == L"bbox")
-				{
-					if (params.find(L'x') != std::wstring::npos)
-					{
-						if (!try_parse<Size>(params, wrap) || wrap.width < 0 || wrap.height < 0)
-						{
-							wrap = Size();
-						}
-					}
-					else
-					{
-						wrap.height = 0;
-						if (!try_parse<int>(params, wrap.width) || wrap.width < 0)
-						{
-							wrap.width = 0;
-						}
-					}
-				}
-				else if (name == L"align" || name == L"a")
-				{
-					alignment = parse<Alignment>(params);
+					font_offset = 0;
 				}
 				else if (name == L"raw")
 				{
@@ -1463,9 +1494,21 @@ namespace BearLibTerminal
 					AppendSymbol(L']');
 				}
 			}
+			else if (c == L'\t')
+			{
+				for (int i = 0; i < m_options.output_tab_width; i++)
+				{
+					AppendSymbol(L' ');
+				}
+			}
 			else if (c == L'\n') // forced line-break
 			{
 				lines.emplace_back();
+				lines.back().size.height = GetTileSpacing(font_offset + L' ').height;
+			}
+			else if (c == L'\r')
+			{
+				// Ignore.
 			}
 			else
 			{
@@ -1501,7 +1544,7 @@ namespace BearLibTerminal
 						int offset = last_line_break + 1;
 						int leave = offset;
 
-						if (line.symbols[last_line_break].code > 0 && GetTileRelativeIndex(line.symbols[last_line_break].code) == (int)L' ')
+						if ((line.symbols[last_line_break].code & Tileset::kCharOffsetMask) == L' ')
 						{
 							leave -= 1;
 						}
@@ -1516,7 +1559,7 @@ namespace BearLibTerminal
 					}
 					else
 					{
-						int relative_index = GetTileRelativeIndex(s.code);
+						int relative_index = (s.code & Tileset::kCharOffsetMask);
 						if (relative_index == (int)L' ' || relative_index == (int)L'-')
 						{
 							last_line_break = j;
@@ -1537,28 +1580,26 @@ namespace BearLibTerminal
 			total_width = std::max(total_width, line.size.width);
 		}
 
+		int horizontal_align = (align & 3);
+		int vertical_align = (align & 12);
+
 		if (!measure_only)
 		{
-			int cutoff_top, cutoff_bottom;
-
-			switch (alignment.vertical)
+			if ((vertical_align & TK_ALIGN_MIDDLE) == TK_ALIGN_MIDDLE)
 			{
-			case Alignment::Bottom:
-				y = y0 - (total_height-1);
-				cutoff_top = y0 - (wrap.height-1);
-				cutoff_bottom = y0;
-				break;
-			case Alignment::Center:
-				y = y0 - (int)std::ceil((total_height-1)/2.0f); // NOTE: floor for lower-or-equal origin
-				cutoff_top = y0 - (int)std::ceil((wrap.height-1)/2.0f);
-				cutoff_bottom = cutoff_top + wrap.height-1;
-				break;
-			default: // Top
-				y = y0;
-				cutoff_top = y0;
-				cutoff_bottom = y0 + (wrap.height-1);
-				break;
+				y = y0 + std::ceil(wrap.height/2.0f - total_height/2.0f);
 			}
+			else if ((vertical_align & TK_ALIGN_BOTTOM) == TK_ALIGN_BOTTOM)
+			{
+				y = y0 + std::max(wrap.height, 1) - total_height;
+			}
+			else // TK_ALIGN_TOP or default
+			{
+				y = y0;
+			}
+
+			int cutoff_top = y0;
+			int cutoff_bottom = cutoff_top + wrap.height-1;
 
 			for (auto& line: lines)
 			{
@@ -1566,17 +1607,17 @@ namespace BearLibTerminal
 
 				if (wrap.height == 0 || (y >= cutoff_top && y <= cutoff_bottom) || (line_bottom >= cutoff_top && line_bottom <= cutoff_bottom))
 				{
-					switch (alignment.horisontal)
+					if ((horizontal_align & TK_ALIGN_CENTER) == TK_ALIGN_CENTER)
 					{
-					case Alignment::Right:
-						x = x0 - (line.size.width - 1);
-						break;
-					case Alignment::Center:
-						x = x0 - (int)std::ceil((line.size.width-1)/2.0f); // NOTE: floor for lower-or-equal origin
-						break;
-					default: // Left
+						x = x0 + std::ceil(wrap.width/2.0f - (line.size.width-0)/2.0f);
+					}
+					else if ((horizontal_align & TK_ALIGN_RIGHT) == TK_ALIGN_RIGHT)
+					{
+						x = x0 + std::max(wrap.width, 1) - line.size.width;
+					}
+					else // TK_ALIGN_LEFT or default
+					{
 						x = x0;
-						break;
 					}
 
 					w = -1;
@@ -1585,7 +1626,7 @@ namespace BearLibTerminal
 					{
 						if (s.code > 0)
 						{
-							PutInternal(x, y, offset.x, offset.y, (wchar_t)s.code, nullptr);
+							PutInternal(x, y, offset.x, offset.y, s.code, nullptr);
 							w = x;
 							x += s.spacing.width;
 						}
@@ -1599,93 +1640,111 @@ namespace BearLibTerminal
 				y += line.size.height;
 			}
 
-			m_world.state.color = original_fore;
-			m_world.state.bkcolor = original_back;
+			m_world.state = original_state;
 		}
 
-		return wrap.width > 0? total_height: total_width;
+		if (wrap.height)
+			total_height = std::min(total_height, wrap.height);
+		return Size{total_width, total_height};
 	}
 
-	bool Terminal::HasInputInternalUnlocked()
+	bool Terminal::IsEventFiltered(int code)
 	{
-		return !m_input_queue.empty();
+		return m_options.input_filter.empty() || m_options.input_filter.count(code);
+	}
+
+	bool Terminal::HasFilteredInput()
+	{
+		for (auto& e: m_input_queue)
+		{
+			if (IsEventFiltered(e.code))
+				return true;
+		}
+
+		return false;
 	}
 
 	int Terminal::HasInput()
 	{
-		std::lock_guard<std::mutex> guard(m_input_lock);
-		if (m_state == kClosed) return 1;
-		return HasInputInternalUnlocked();
+		CHECK_THREAD("has_input", 0);
+
+		m_window->PumpEvents();
+
+		if (m_state != kVisible)
+			return 1;
+
+		return HasFilteredInput();
 	}
 
 	int Terminal::GetState(int code)
 	{
-		std::lock_guard<std::mutex> guard(m_input_lock);
 		return (code >= 0 && code < (int)m_vars.size())? m_vars[code]: 0;
 	}
 
-	Event Terminal::ReadEvent(int timeout)
+	Event Terminal::ReadEvent(int timeout) // FIXME: more precise wait
 	{
-		std::unique_lock<std::mutex> lock(m_input_lock);
+		if (m_state != kVisible)
+			return {TK_CLOSE};
 
-		if (m_state == kClosed)
-		{
-			return Event(TK_CLOSE);
-		}
+		auto started = std::chrono::system_clock::now();
 
-		bool timed_out = false;
+		do
+		{
+			m_window->PumpEvents();
 
-		if (timeout > 0)
-		{
-			timed_out = !m_input_condvar.wait_for
-			(
-				lock,
-				std::chrono::milliseconds(timeout),
-				[&](){return HasInputInternalUnlocked();}
-			);
-		}
+			if (HasFilteredInput())
+			{
+				while (!m_input_queue.empty())
+				{
+					Event e = m_input_queue.front();
+					m_input_queue.pop_front();
+					ConsumeEvent(e);
+					if (IsEventFiltered(e.code))
+						return e;
+				}
 
-		if ((timeout > 0 && !timed_out) || (timeout == 0 && HasInputInternalUnlocked()))
-		{
-			Event event = m_input_queue.front();
-			ConsumeEvent(event);
-			m_input_queue.pop_front();
-			return event;
+				return 0;
+			}
+			else
+			{
+				//Delay(5);
+				std::this_thread::sleep_for(std::chrono::milliseconds{5});
+			}
 		}
-		else if (m_state == kClosed)
-		{
-			// State may change while waiting for a condvar
-			return Event(TK_CLOSE);
-		}
-		else
-		{
-			// Instance is not closed and input either timed out or was not present from the start
-			return Event(TK_INPUT_NONE);
-		}
+		while (std::chrono::system_clock::now() - started < std::chrono::milliseconds{timeout});
+
+		return {TK_INPUT_NONE};
 	}
 
 	int Terminal::Read()
 	{
+		CHECK_THREAD("read", TK_CLOSE);
+
 		return ReadEvent(std::numeric_limits<int>::max()).code;
 	}
 
 	int Terminal::Peek()
 	{
-		std::unique_lock<std::mutex> lock(m_input_lock);
+		CHECK_THREAD("peek", TK_CLOSE);
 
-		if (m_state == kClosed)
+		m_window->PumpEvents();
+
+		if (m_state != kVisible)
 		{
 			return TK_CLOSE;
 		}
-		else if (m_input_queue.empty())
+		else if (HasFilteredInput())
 		{
-			return TK_INPUT_NONE;
+			for (auto& e: m_input_queue)
+			{
+				ConsumeEvent(e);
+				if (IsEventFiltered(e.code))
+					return e.code;
+			}
 		}
 		else
 		{
-			Event event = m_input_queue.front();
-			ConsumeEvent(event);
-			return event.code;
+			return TK_INPUT_NONE;
 		}
 	}
 
@@ -1694,6 +1753,8 @@ namespace BearLibTerminal
 	 */
 	int Terminal::ReadString(int x, int y, wchar_t* buffer, int max)
 	{
+		CHECK_THREAD("read_str", TK_INPUT_CANCELLED);
+
 		std::vector<Cell> original;
 		int composition_mode = m_world.state.composition;
 		m_world.state.composition = TK_ON;
@@ -1724,13 +1785,12 @@ namespace BearLibTerminal
 
 		auto put_buffer = [&](bool put_cursor)
 		{
-			Print(x, y, buffer, true, false);
+			Print(x, y, 0, 0, TK_ALIGN_DEFAULT, buffer, true, false);
 			if (put_cursor && cursor < max) Put(x+cursor, y, m_options.input_cursor_symbol);
 		};
 
 		auto restore_scene = [&]()
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
 			for (int i = 0; i < max; i++)
 			{
 				Layer& layer = m_world.stage.backbuffer.layers[m_world.state.layer];
@@ -1747,7 +1807,8 @@ namespace BearLibTerminal
 			put_buffer(show_cursor);
 			Refresh();
 
-			auto event = ReadEvent(m_options.input_cursor_blink_rate);
+			int blink_rate = m_options.input_cursor_blink_rate;
+			auto event = ReadEvent(blink_rate? blink_rate: std::numeric_limits<int>::max());
 
 			if (event.code == TK_INPUT_NONE)
 			{
@@ -1791,7 +1852,20 @@ namespace BearLibTerminal
 
 	void Terminal::Delay(int period)
 	{
-		m_window->Delay(period);
+		CHECK_THREAD("delay", );
+
+		auto until = std::chrono::system_clock::now() + std::chrono::milliseconds{period};
+		std::chrono::system_clock::duration step = std::chrono::milliseconds{5};
+
+		while (true)
+		{
+			int pumped = m_window->PumpEvents();
+			auto left = until - std::chrono::system_clock::now();
+			if (left <= std::chrono::system_clock::duration::zero())
+				break;
+			if (!pumped)
+				std::this_thread::sleep_for(std::min(step, left));
+		}
 	}
 
 	const Encoding<char>& Terminal::GetEncoding() const
@@ -1799,9 +1873,15 @@ namespace BearLibTerminal
 		return *m_encoding;
 	}
 
+	std::wstring Terminal::GetClipboard()
+	{
+		return m_window->GetClipboard();
+	}
+
 	void Terminal::ConfigureViewport()
 	{
 		Size viewport_size = m_window->GetActualSize();
+
 		Size stage_size = m_world.stage.size * m_world.state.cellsize;
 		m_stage_area = Rectangle(stage_size);
 		m_stage_area_factor = SizeF(1, 1);
@@ -1873,78 +1953,151 @@ namespace BearLibTerminal
 		);
 
 		m_viewport_scissors_enabled = viewport_size != stage_size;
+
+		// ?..
+		m_window->SetVSync(m_options.output_vsync);
 	}
 
-	void Terminal::PrepareFreshCharacters()
+	void DrawTile(const Leaf& leaf, const TileInfo& tile, int x, int y, int w2, int h2)
 	{
-		for (auto code: m_fresh_codes)
+		// TODO: Think up of some optimization?
+		// There are a lot of calculations done.
+
+		int left, top;
+
+		w2 *= tile.spacing.width;
+		h2 *= tile.spacing.height;
+
+		switch (tile.alignment)
 		{
-			if (m_world.tiles.slots.find(code) != m_world.tiles.slots.end())
-			{
-				// Might be already prepared on previous iteration.
-				continue;
-			}
-
-			bool provided = false;
-
-			// Box Drawing (2500–257F) and Block Elements (2580–259F) are searched in different order
-			bool is_dynamic = (code >= 0x2500 && code <= 0x257F) || (code >= 0x2580 && code <= 0x259F);
-
-			for (auto i = m_world.tilesets.rbegin(); i != m_world.tilesets.rend(); i++)
-			{
-				if (is_dynamic)
-				{
-					// While searching for dynamic character provider, skip:
-					// * dynamic tileset at 0xFFFD base code
-					// * truetype basic tileset at 0x0000 code
-
-					bool unsuitable =
-						(i->first == kUnicodeReplacementCharacter) ||
-						((i->first == 0x0000 && i->second->GetType() == Tileset::Type::TrueType));
-
-					if (unsuitable)
-						continue;
-				}
-
-				if (i->second->Provides(code))
-				{
-					i->second->Prepare(code);
-					provided = true;
-					break;
-				}
-			}
-
-			// If nothing was found, use dynamic tileset as a last resort
-			if (!provided && m_world.tilesets[kUnicodeReplacementCharacter]->Provides(code))
-			{
-				m_world.tilesets[kUnicodeReplacementCharacter]->Prepare(code);
-			}
+		case TileAlignment::Center:
+		case TileAlignment::DeadCenter:
+			left = x + tile.offset.x + w2 + leaf.dx;
+			top = y + tile.offset.y + h2 + leaf.dy;
+			break;
+		case TileAlignment::TopRight:
+			left = x + tile.offset.x + 2*w2 - tile.useful_space.width + leaf.dx;
+			top = y + tile.offset.y + leaf.dy;
+			break;
+		case TileAlignment::BottomLeft:
+			left = x + tile.offset.x + leaf.dx;
+			top = y + tile.offset.y + 2*h2 - tile.useful_space.height + leaf.dy;
+			break;
+		case TileAlignment::BottomRight:
+			left = x + tile.offset.x + 2*w2 - tile.useful_space.width + leaf.dx;
+			top = y + tile.offset.y + 2*h2 - tile.useful_space.height + leaf.dy;
+			break;
+		case TileAlignment::TopLeft:
+		default:
+			// Same as TopLeft
+			left = x + tile.offset.x + leaf.dx;
+			top = y + tile.offset.y + leaf.dy;
+			break;
 		}
 
-		m_fresh_codes.clear();
+		int right = left + tile.useful_space.width;
+		int bottom = top + tile.useful_space.height;
+
+		if (leaf.flags & Leaf::CornerColored)
+		{
+			/*
+			// Single-quad version (incorrect interpolation)
+			// Top-left
+			glColor4ub(leaf.color[0].r, leaf.color[0].g, leaf.color[0].b, leaf.color[0].a);
+			glTexCoord2f(texture_coords.tu1, texture_coords.tv1);
+			glVertex2i(left, top);
+
+			// Bottom-left
+			glColor4ub(leaf.color[1].r, leaf.color[1].g, leaf.color[1].b, leaf.color[1].a);
+			glTexCoord2f(texture_coords.tu1, texture_coords.tv2);
+			glVertex2i(left, bottom);
+
+			// Bottom-right
+			glColor4ub(leaf.color[2].r, leaf.color[2].g, leaf.color[2].b, leaf.color[2].a);
+			glTexCoord2f(texture_coords.tu2, texture_coords.tv2);
+			glVertex2i(right, bottom);
+
+			// Top-right
+			glColor4ub(leaf.color[3].r, leaf.color[3].g, leaf.color[3].b, leaf.color[3].a);
+			glTexCoord2f(texture_coords.tu2, texture_coords.tv1);
+			glVertex2i(right, top);
+			/*/
+
+			// 2-quad version
+			// Center color
+			int cr = (leaf.color[0].r + leaf.color[1].r + leaf.color[2].r + leaf.color[3].r)/4;
+			int cg = (leaf.color[0].g + leaf.color[1].g + leaf.color[2].g + leaf.color[3].g)/4;
+			int cb = (leaf.color[0].b + leaf.color[1].b + leaf.color[2].b + leaf.color[3].b)/4;
+			int ca = (leaf.color[0].a + leaf.color[1].a + leaf.color[2].a + leaf.color[3].a)/4;
+			// Center texture coords
+			float cu = (tile.texture_coords.tu1 + tile.texture_coords.tu2)/2.0f;
+			float cv = (tile.texture_coords.tv1 + tile.texture_coords.tv2)/2.0f;
+			// Center coordinate
+			float cx = (left + right)/2.0f;
+			float cy = (top + bottom)/2.0f;
+
+			// First quad
+			// Top-left
+			glColor4ub(leaf.color[0].r, leaf.color[0].g, leaf.color[0].b, leaf.color[0].a);
+			glTexCoord2f(tile.texture_coords.tu1, tile.texture_coords.tv1);
+			glVertex2i(left, top);
+			// Bottom-left
+			glColor4ub(leaf.color[1].r, leaf.color[1].g, leaf.color[1].b, leaf.color[1].a);
+			glTexCoord2f(tile.texture_coords.tu1, tile.texture_coords.tv2);
+			glVertex2i(left, bottom);
+			// Center
+			glColor4ub(cr, cg, cb, ca);
+			glTexCoord2f(cu, cv);
+			glVertex2i(cx, cy);
+			// Top-right
+			glColor4ub(leaf.color[3].r, leaf.color[3].g, leaf.color[3].b, leaf.color[3].a);
+			glTexCoord2f(tile.texture_coords.tu2, tile.texture_coords.tv1);
+			glVertex2i(right, top);
+
+			// Second squad
+			// Bottom-right
+			glColor4ub(leaf.color[2].r, leaf.color[2].g, leaf.color[2].b, leaf.color[2].a);
+			glTexCoord2f(tile.texture_coords.tu2, tile.texture_coords.tv2);
+			glVertex2i(right, bottom);
+			// Top-right
+			glColor4ub(leaf.color[3].r, leaf.color[3].g, leaf.color[3].b, leaf.color[3].a);
+			glTexCoord2f(tile.texture_coords.tu2, tile.texture_coords.tv1);
+			glVertex2i(right, top);
+			// Center
+			glColor4ub(cr, cg, cb, ca);
+			glTexCoord2f(cu, cv);
+			glVertex2i(cx, cy);
+			// Bottom-left
+			glColor4ub(leaf.color[1].r, leaf.color[1].g, leaf.color[1].b, leaf.color[1].a);
+			glTexCoord2f(tile.texture_coords.tu1, tile.texture_coords.tv2);
+			glVertex2i(left, bottom);
+			//*/
+		}
+		else
+		{
+			// Single-colored version
+			glColor4ub(leaf.color[0].r, leaf.color[0].g, leaf.color[0].b, leaf.color[0].a);
+
+			// Top-left
+			glTexCoord2f(tile.texture_coords.tu1, tile.texture_coords.tv1);
+			glVertex2i(left, top);
+
+			// Bottom-left
+			glTexCoord2f(tile.texture_coords.tu1, tile.texture_coords.tv2);
+			glVertex2i(left, bottom);
+
+			// Bottom-right
+			glTexCoord2f(tile.texture_coords.tu2, tile.texture_coords.tv2);
+			glVertex2i(right, bottom);
+
+			// Top-right
+			glTexCoord2f(tile.texture_coords.tu2, tile.texture_coords.tv1);
+			glVertex2i(right, top);
+		}
 	}
 
-	int Terminal::Redraw(bool async)
+	int Terminal::Redraw()
 	{
-		//*
-		// Rendering callback will try to acquire the lock. Failing to  do so
-		// will mean that Terminal is currently busy. Calling window implementation
-		// SHOULD be prepared to reschedule painting to a later time.
-		std::unique_lock<std::mutex> guard(m_lock, std::try_to_lock);
-		if (!guard.owns_lock())
-		{
-			return -1; // TODO: enum TODO: timed try
-		}
-		/*/
-		std::unique_lock<std::mutex> guard(m_lock);
-		//*/
-
-		// Provide tile slots for newly added codes
-		if (!m_fresh_codes.empty())
-		{
-			PrepareFreshCharacters();
-		}
-
 		if (m_viewport_modified)
 		{
 			ConfigureViewport();
@@ -1993,14 +2146,15 @@ namespace BearLibTerminal
 		}
 		glEnd();
 
-		m_world.tiles.atlas.Refresh();
 		Texture::Enable();
 
 		int w2 = m_world.state.half_cellsize.width;
 		int h2 = m_world.state.half_cellsize.height;
 		bool layer_scissors_applied = false;
 
-		uint64_t current_texture_id = 0;
+		AtlasTexture* current_texture = nullptr;
+		auto replacement_tile = GetTileInfo(kUnicodeReplacementCharacter);
+
 		glBegin(GL_QUADS);
 		glColor4f(1, 1, 1, 1);
 		for (auto& layer: m_world.stage.frontbuffer.layers)
@@ -2027,24 +2181,18 @@ namespace BearLibTerminal
 				{
 					for (auto& leaf: layer.cells[i].leafs)
 					{
-						auto j = m_world.tiles.slots.find(leaf.code);
+						auto i = g_codespace.find(leaf.code);
+						auto tile = (i == g_codespace.end()? replacement_tile: i->second.get());
 
-						if (j == m_world.tiles.slots.end())
-						{
-							// Replacement character MUST be provided by the ever-present dynamic tileset.
-							j = m_world.tiles.slots.find(kUnicodeReplacementCharacter);
-						}
-
-						auto& slot = *(j->second);
-						if (slot.texture_id != current_texture_id)
+						if (tile->texture != current_texture)
 						{
 							glEnd();
-							slot.BindTexture();
-							current_texture_id = slot.texture_id;
+							tile->texture->Bind();
+							current_texture = tile->texture;
 							glBegin(GL_QUADS);
 						}
 
-						slot.Draw(leaf, left, top, w2, h2);
+						DrawTile(leaf, *tile, left, top, w2, h2);
 					}
 
 					i += 1;
@@ -2096,81 +2244,47 @@ namespace BearLibTerminal
 		return 1;
 	}
 
-	/**
-	 * NOTE: if window initialization has succeeded, this callback will be called for sure
-	 */
-	void Terminal::HandleDestroy()
-	{
-		std::lock_guard<std::mutex> guard(m_lock);
-		m_state = kClosed;
-
-		// Dispose of graphics
-		m_world.tiles.slots.clear();
-		m_world.tilesets.clear();
-		m_world.tiles.atlas.Dispose();
-
-		// Unblock possibly blocked client thread
-		m_input_condvar.notify_all();
-	}
-
 	void Terminal::PushEvent(Event event)
 	{
-		bool must_be_consumed = false;
-		{
-			std::lock_guard<std::mutex> guard(m_lock);
-			must_be_consumed = !m_options.input_filter.empty() && !m_options.input_filter.count(event.code);
-		}
-
-		std::lock_guard<std::mutex> guard(m_input_lock);
-
-		if (must_be_consumed)
-		{
-			ConsumeEvent(event);
-		}
-		else
-		{
-			m_input_queue.push_back(event);
-			m_input_condvar.notify_all();
-		}
+		m_input_queue.push_back(event);
 	}
 
 	int Terminal::OnWindowEvent(Event event)
 	{
-		bool alt = get_locked(m_vars[TK_ALT], m_input_lock);
-
-		if (event.code == TK_DESTROY)
+		if (event.code == TK_REDRAW)
 		{
-			HandleDestroy();
+			Render();
 			return 0;
-		}
-		else if (event.code == TK_REDRAW)
-		{
-			return Redraw(true);
 		}
 		else if (event.code == TK_INVALIDATE)
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
 			m_viewport_modified = true;
 			return 0;
 		}
+		// XXX: used to release keys on input focus gain (at least under Windows)
 		else if (event.code == TK_ACTIVATED)
 		{
-			for (int i = TK_A; i <= TK_CONTROL; i++)
+			for (int i = TK_A; i <= TK_ALT; i++)
 			{
-				if (m_vars[i]) // FIXME: race condition
+				if (m_vars[i])
 					PushEvent(Event(i|TK_KEY_RELEASED, {{i, 0}}));
 			}
 
-			return 0;
-		}
-		else if (event.code == TK_STATE_UPDATE)
-		{
-			ConsumeEvent(event);
+			// Clear Alt state which is commonly remain stuck, e. g. after Alt-Tab.
+			m_alt_pressed = false;
+
 			return 0;
 		}
 		else if (event.code == TK_RESIZED)
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
+			// Remove all unprocessed resize events as the latest one overrides them.
+			for (auto i = m_input_queue.begin(); i != m_input_queue.end(); )
+			{
+				if (i->code == TK_RESIZED)
+					i = m_input_queue.erase(i);
+				else
+					i++;
+			}
 
 			float scale_factor = kScaleSteps[m_scale_step];
 			Size& cellsize = m_world.state.cellsize;
@@ -2194,8 +2308,6 @@ namespace BearLibTerminal
 		}
 		else if (event.code == TK_MOUSE_MOVE)
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
-
 			int& pixel_x = event[TK_MOUSE_PIXEL_X];
 			int& pixel_y = event[TK_MOUSE_PIXEL_Y];
 
@@ -2209,96 +2321,115 @@ namespace BearLibTerminal
 
 			// Cell location of mouse pointer
 			Size& cellsize = m_world.state.cellsize;
-			Point location
-			(
-				std::floor(pixel_x/(float)cellsize.width),
-				std::floor(pixel_y/(float)cellsize.height)
-			);
+			Point location(pixel_x / cellsize.width, pixel_y / cellsize.height);
+			location = Rectangle(m_world.stage.size).Clamp(location);
+			event[TK_MOUSE_X] = location.x;
+			event[TK_MOUSE_Y] = location.y;
 
-			if (location.x < 0)
+			// If application do not read events fast enough, do not flood it with mouse moves.
+			if (!m_input_queue.empty() && m_input_queue.back().code == TK_MOUSE_MOVE)
 			{
-				location.x = 0;
-				pixel_x = 0;
-			}
-			else if (location.x >= m_world.stage.size.width)
-			{
-				location.x = m_world.stage.size.width-1;
-				pixel_x = m_world.stage.size.width*cellsize.width-1;
-			}
-
-			if (location.y < 0)
-			{
-				location.y = 0;
-				pixel_y = 0;
-			}
-			else if (location.y >= m_world.stage.size.height)
-			{
-				location.y = m_world.stage.size.height-1;
-				pixel_y = m_world.stage.size.height*cellsize.height-1;
-			}
-
-			if (!m_options.input_precise_mouse && m_vars[TK_MOUSE_X] == location.x && m_vars[TK_MOUSE_Y] == location.y)
-			{
-				// This event do not change mouse cell position, ignore.
-				return 0;
-			}
-			else
-			{
-				// Make event update both pixel and cell positions.
-				event[TK_MOUSE_X] = location.x;
-				event[TK_MOUSE_Y] = location.y;
-			}
-		}
-		else if (event.code == TK_A && alt)
-		{
-			// Alt+A: dump atlas textures to disk.
-			std::lock_guard<std::mutex> guard(m_lock);
-			m_world.tiles.atlas.Dump();
-			return 0;
-		}
-		else if (event.code == TK_G && alt)
-		{
-			// Alt+G: toggle grid
-			m_show_grid = !m_show_grid;
-			if (Redraw(true) != -1)
-				m_window->SwapBuffers();
-			return 0;
-		}
-		else if (event.code == TK_RETURN && alt)
-		{
-			// Alt+ENTER: toggle fullscreen.
-			m_viewport_modified = true;
-			m_window->ToggleFullscreen();
-			return 0;
-		}
-		else if ((event.code == TK_MINUS || event.code == TK_EQUALS || event.code == TK_KP_MINUS || event.code == TK_KP_PLUS) && alt)
-		{
-			if (get_locked(m_options.window_resizeable, m_lock))
-			{
-				// No scaling in resizeable mode, at least not yet.
+				// Replace the last, yet unread event with the most recent one.
+				m_input_queue.back() = event;
 				return 0;
 			}
 
-			// Alt+(plus/minus): adjust user window scaling.
-			if ((event.code == TK_MINUS || event.code == TK_KP_MINUS) && m_scale_step > 0)
+			// Ignore mouse movement events that do not change coarse cursor location.
+			if (!m_options.input_precise_mouse)
 			{
-				m_scale_step -= 1;
-			}
-			else if ((event.code == TK_EQUALS || event.code == TK_KP_PLUS) && m_scale_step < kScaleSteps.size()-1)
-			{
-				m_scale_step += 1;
-			}
+				Point last_location{m_vars[TK_MOUSE_X], m_vars[TK_MOUSE_Y]};
 
-			m_window->SetSizeHints(m_world.state.cellsize * kScaleSteps[m_scale_step], m_options.window_minimum_size);
-			m_window->SetClientSize(m_world.state.cellsize * m_world.stage.size * kScaleSteps[m_scale_step]);
+				// Search for last mouse movement event in the queue.
+				for (auto i = m_input_queue.rbegin(); i != m_input_queue.rend(); i++)
+				{
+					if (i->code == TK_MOUSE_MOVE)
+					{
+						last_location = Point{(*i)[TK_MOUSE_X], (*i)[TK_MOUSE_Y]};
+						break;
+					}
+				}
 
-			return 0;
+				if (location == last_location)
+				{
+					return 0;
+				}
+			}
 		}
-		else if ((event.code & 0xFF) == TK_ALT)
+		else if ((event.code & 0xFF) == TK_ALT && m_options.input_alt_functions)
 		{
-			std::lock_guard<std::mutex> guard(m_input_lock);
-			ConsumeEvent(event);
-			return 0;
+			m_alt_pressed = event.properties[TK_ALT];
+		}
+
+		if (m_options.input_alt_functions && m_alt_pressed)
+		{
+			/*if (event.code == TK_A)
+			{
+				// Alt+A: dump atlas textures to disk.
+				m_world.tiles.atlas.Dump();
+				return 0;
+			}
+			else*/ if (event.code == TK_G)
+			{
+				// Alt+G: toggle grid
+				m_show_grid = !m_show_grid;
+				Render();
+				return 0;
+			}
+			else if (event.code == TK_RETURN)
+			{
+				// Alt+ENTER: toggle fullscreen.
+				m_vars[TK_FULLSCREEN] = !m_vars[TK_FULLSCREEN];
+				m_options.window_fullscreen = m_vars[TK_FULLSCREEN];
+				m_window->SetFullscreen(m_options.window_fullscreen);
+				return 0;
+			}
+			else if (event.code == TK_MINUS || event.code == TK_EQUALS || event.code == TK_0 ||
+			         event.code == TK_KP_MINUS || event.code == TK_KP_PLUS || event.code == TK_KP_0)
+			{
+				if (m_vars[TK_FULLSCREEN])
+				{
+					// No scaling in fullscreen mode (does not make sense anyway).
+					return 0;
+				}
+
+				// Alt+(plus/minus/zero): adjust user window scaling.
+				if ((event.code == TK_MINUS || event.code == TK_KP_MINUS) && m_scale_step > 0)
+				{
+					m_scale_step -= 1;
+				}
+				else if ((event.code == TK_EQUALS || event.code == TK_KP_PLUS) && m_scale_step < kScaleSteps.size()-1)
+				{
+					m_scale_step += 1;
+				}
+				else if ((event.code == TK_0 || event.code == TK_KP_0) && m_scale_step != 1)
+				{
+					m_scale_step = 1;
+				}
+
+				float scale = kScaleSteps[m_scale_step];
+
+				if (m_options.window_resizeable || m_options.window_client_size.Area() == 0)
+				{
+					// Resizeable window always snaps to cell borders.
+					m_window->SetSizeHints(m_world.state.cellsize * scale, m_options.window_minimum_size);
+					m_window->SetClientSize(m_world.state.cellsize * m_world.stage.size * scale);
+				}
+				else
+				{
+					// Overriden client-size is scaled with everything else.
+					m_window->SetClientSize(m_options.window_client_size * scale);
+				}
+
+				return 0;
+			}
+			else if (event.code == TK_F)
+			{
+				m_options.output_texture_filter = g_texture_filter =
+					(g_texture_filter == GL_LINEAR)? GL_NEAREST: GL_LINEAR;
+				g_atlas.ApplyTextureFilter();
+				Render();
+				return 0;
+			}
 		}
 
 		PushEvent(std::move(event));
@@ -2310,8 +2441,6 @@ namespace BearLibTerminal
 	{
 		if (event.code == TK_RESIZED)
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
-
 			if (m_options.window_resizeable)
 			{
 				// Stage size changed, must reallocate and reconstruct scene
@@ -2330,14 +2459,22 @@ namespace BearLibTerminal
 				return;
 			}
 		}
-		else if (event.code == TK_CLOSE)
+		else if (event.code >= TK_KP_DIVIDE && event.code <= TK_KP_PERIOD)
 		{
-			std::lock_guard<std::mutex> guard(m_lock);
-
-			if (m_options.input_sticky_close)
+			// Keypad is translated to characters here because platform-specific translation is
+			// * much more complex (e. g. WM_CHAR vs WM_KEYDOWN)
+			// * not always possible (subject to NumLock and terminal ignores NumLock by design)
+			static std::map<int, wchar_t> keypad_char_mapping =
 			{
-				m_vars[TK_CLOSE] = 1;
-			}
+				{TK_KP_DIVIDE, L'/'}, {TK_KP_MULTIPLY, L'*'}, {TK_KP_MINUS, L'-'}, {TK_KP_PLUS, L'+'},
+				{TK_KP_ENTER, 0},
+				{TK_KP_1, L'1'}, {TK_KP_2, L'2'}, {TK_KP_3, L'3'},
+				{TK_KP_4, L'4'}, {TK_KP_5, L'5'}, {TK_KP_6, L'6'},
+				{TK_KP_7, L'7'}, {TK_KP_8, L'8'}, {TK_KP_9, L'9'},
+				{TK_KP_0, L'0'}, {TK_KP_PERIOD, L'.'}
+			};
+
+			event.properties[TK_WCHAR] = keypad_char_mapping[event.code];
 		}
 
 		if (!event.properties.count(TK_WCHAR))
@@ -2367,5 +2504,11 @@ namespace BearLibTerminal
 		}
 
 		m_vars[TK_EVENT] = event.code;
+	}
+
+	void Terminal::Render()
+	{
+		Redraw();
+		m_window->SwapBuffers();
 	}
 }

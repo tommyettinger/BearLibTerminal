@@ -1,40 +1,42 @@
 /*
- * BitmapTileset.hpp
- *
- *  Created on: Oct 17, 2013
- *      Author: Cfyz
- */
+* BearLibTerminal
+* Copyright (C) 2013-2016 Cfyz
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+* of the Software, and to permit persons to whom the Software is furnished to do
+* so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in all
+* copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+* FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+* COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+* IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+* CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 
 #ifndef BITMAPTILESET_HPP_
 #define BITMAPTILESET_HPP_
 
 #include "Tileset.hpp"
-#include "Encoding.hpp"
-#include "Bitmap.hpp"
+#include <vector>
+#include <stdint.h>
 
 namespace BearLibTerminal
 {
-	class BitmapTileset: public StronglyTypedReloadableTileset<BitmapTileset>
+	class BitmapTileset: public Tileset
 	{
 	public:
-		BitmapTileset(TileContainer& container, OptionGroup& group);
-		void Remove();
-		bool Save();
-		void Reload(BitmapTileset&& tileset);
+		BitmapTileset(char32_t offset, std::vector<uint8_t> data, OptionGroup& options);
 		Size GetBoundingBoxSize();
-		Size GetSpacing();
-		const Encoding<char>* GetCodepage();
-		Type GetType();
-		bool Provides(uint16_t code);
-		void Prepare(uint16_t code);
+
 	private:
-		Bitmap m_cache;
-		uint16_t m_base_code;
-		Size m_tile_size;
-		Size m_bbox_size;
-		Size m_grid_size;
-		std::unique_ptr<Encoding<char>> m_codepage;
-		Tile::Alignment m_alignment;
+		Size m_bounding_box_size;
 	};
 }
 
