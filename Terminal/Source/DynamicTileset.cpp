@@ -375,8 +375,8 @@ namespace BearLibTerminal
 		{0,0,1,0,0, 1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1, 0,0,0,0,0}, // 2537: Wide left and right, single top
 		{0,1,1,1,0, 0,1,1,1,0, 1,1,1,1,1, 0,0,0,0,0, 0,0,0,0,0}, // 2538: Single left and right, wide top
 		{0,1,1,1,0, 1,1,1,1,0, 1,1,1,1,1, 1,1,1,1,0, 0,0,0,0,0}, // 2539: Wide left and top, single right
-		{0,1,1,1,0, 0,1,1,1,0, 0,1,1,1,1, 0,1,1,1,0, 0,1,1,1,0}, // 253A: Wide top and bottom, single right
-		{0,1,1,1,0, 1,1,1,1,0, 1,1,1,1,0, 1,1,1,1,0, 0,1,1,1,0}, // 253B: Wide left, top and bottom
+		{0,1,1,1,0, 0,1,1,1,1, 1,1,1,1,1, 0,1,1,1,1, 0,0,0,0,0}, // 253A: Wide top and right, single left
+		{0,1,1,1,0, 1,1,1,1,1, 1,1,1,1,1, 1,1,1,1,1, 0,0,0,0,0}, // 253B: Wide left, top and right
 		{0,0,1,0,0, 0,0,1,0,0, 1,1,1,1,1, 0,0,1,0,0, 0,0,1,0,0}, // 253C: Single left, top, right and bottom
 		{0,0,1,0,0, 1,1,1,0,0, 1,1,1,1,1, 1,1,1,0,0, 0,0,1,0,0}, // 253D: Wide left, single top, right and bottom
 		{0,0,1,0,0, 0,0,1,1,1, 1,1,1,1,1, 0,0,1,1,1, 0,0,1,0,0}, // 253E: Single left, top and bottom, wide right
