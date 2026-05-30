@@ -184,10 +184,14 @@ namespace BearLibTerminal
 
 namespace std
 {
+	// Only define make_unique if not already provided by the standard library (C++14+).
+	// MSVC provides make_unique even in C++11 mode as an extension.
+#if !defined(__cpp_lib_make_unique) && (!defined(_MSC_VER) || _MSC_VER < 1900)
 	template<typename T, typename... Args> std::unique_ptr<T> make_unique(Args&&... args)
 	{
 		return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
 	}
+#endif
 }
 
 #endif /* UTILITY_HPP_ */

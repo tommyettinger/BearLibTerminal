@@ -27,6 +27,7 @@
 // Also, gl.h in windows is a bit outdated
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <GL/gl.h>
 #undef LoadBitmap // There is a function with same name in WinAPI

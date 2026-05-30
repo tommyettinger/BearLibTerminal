@@ -23,6 +23,7 @@
 #include "Log.hpp"
 
 #if defined(_WIN32)
+#define NOMINMAX
 #include <windows.h>
 #elif defined(__linux)
 #include <sys/time.h>
