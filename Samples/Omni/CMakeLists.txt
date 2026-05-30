@@ -17,19 +17,29 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Release flags
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g0")
-if(NOT APPLE)
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-s")
+if(MSVC)
+	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MT /O2 /DNDEBUG")
+else()
+	set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g0")
+	if(NOT APPLE)
+		set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-s")
+	endif()
 endif()
 
 # Debug flags
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
+if(MSVC)
+	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /MTd /Od /Zi /RTC1")
+else()
+	set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
+endif()
 
 # Common linker flags
-if(WIN32)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -mwindows")
+if(MSVC)
+	# MSVC uses /MT for static CRT (set via compiler flags), no extra linker flags needed
+elseif(WIN32)
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -mwindows")
 elseif(LINUX)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
 endif()
 
 set(SOURCE_FILES
