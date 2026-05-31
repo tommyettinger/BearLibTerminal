@@ -30,12 +30,19 @@
 
 namespace BearLibTerminal
 {
-	template<typename char_t> struct ci_less: // FIXME: --> Utility
-		std::binary_function<std::basic_string<char_t>, std::basic_string<char_t>, bool>
+	template<typename char_t> struct ci_less // FIXME: --> Utility
 	{
-		struct nocase_compare:
-			public std::binary_function<char_t, char_t, bool>
+		// Provide binary_function typedefs for compatibility (std::binary_function removed in C++17)
+		typedef std::basic_string<char_t> first_argument_type;
+		typedef std::basic_string<char_t> second_argument_type;
+		typedef bool result_type;
+
+		struct nocase_compare
 		{
+			// Provide binary_function typedefs for compatibility (std::binary_function removed in C++17)
+			typedef char_t first_argument_type;
+			typedef char_t second_argument_type;
+			typedef bool result_type;
 			bool operator()(const char_t& c1, const char_t& c2) const
 			{
 				return std::tolower(c1) < std::tolower(c2);

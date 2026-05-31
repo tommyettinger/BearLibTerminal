@@ -36,6 +36,7 @@
 #define _WIN32_WINNT 0x502
 #endif
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -167,8 +168,10 @@ namespace BearLibTerminal
 		try
 		{
 			Module psapi(L"Psapi.dll");
-			auto EnumProcessModules = (BOOL WINAPI (*)(HANDLE, HMODULE*, DWORD, LPDWORD))psapi["EnumProcessModules"];
-			auto GetModuleFileNameExW = (DWORD WINAPI (*)(HANDLE, HMODULE, LPWSTR, DWORD))psapi["GetModuleFileNameExW"];
+			typedef BOOL (WINAPI *EnumProcessModules_t)(HANDLE, HMODULE*, DWORD, LPDWORD);
+			typedef DWORD (WINAPI *GetModuleFileNameExW_t)(HANDLE, HMODULE, LPWSTR, DWORD);
+			auto EnumProcessModules = (EnumProcessModules_t)psapi["EnumProcessModules"];
+			auto GetModuleFileNameExW = (GetModuleFileNameExW_t)psapi["GetModuleFileNameExW"];
 
 			HANDLE process = GetCurrentProcess();
 			DWORD bytes_needed = 0;

@@ -32,7 +32,9 @@
 #include <fstream>
 #include <cmath>
 
+#if !defined(_WIN32)
 #include <sys/time.h>
+#endif
 
 namespace BearLibTerminal
 {
